@@ -1,30 +1,10 @@
 # DevPulse
 
-DevPulse is a CI/CD pipeline monitoring and deployment management dashboard in development. This first phase provides a FastAPI service, a local SQLite database, and the initial SQLAlchemy schema.
+DevPulse visualizes GitHub Actions runs and deployment history across public repositories. Open the built-in demo immediately, or create an account to connect and sync a GitHub repository.
 
-## Project layout
+## Run locally
 
-```text
-devpulse/
-├── .github/workflows/    # GitHub Actions workflow directory
-├── backend/
-│   ├── __init__.py       # Python package marker
-│   ├── main.py           # FastAPI startup and GET /health
-│   ├── database.py       # SQLite path and SQLAlchemy engine
-│   ├── models.py         # Tables, foreign keys, and relationships
-│   ├── routers/          # Future API modules
-│   ├── services/         # Future GitHub and pipeline logic
-│   └── tests/            # Pytest coverage for the API and schema
-├── frontend/             # Future HTML, CSS, and JavaScript
-├── .env.example          # Optional database path example
-├── .gitignore
-├── requirements.txt     # Runtime and test dependencies
-└── README.md
-```
-
-## Set up and run
-
-Use Python 3.11 or newer and run the commands from the project root.
+Use Python 3.11 or newer. Run these commands from the repository root.
 
 **Windows PowerShell**
 
@@ -42,32 +22,66 @@ python3 -m venv .venv
 .venv/bin/python -m uvicorn backend.main:app --reload
 ```
 
-Open [GET /health](http://127.0.0.1:8000/health). A successful check returns HTTP 200 with this body.
+Open the [dashboard](http://127.0.0.1:8000/), [API docs](http://127.0.0.1:8000/docs), or [health check](http://127.0.0.1:8000/health). SQLite creates its data file at `data/devpulse.sqlite3` on startup.
 
-```json
-{"status": "ok", "database": "ok"}
+## Monitor a repository
+
+1. Create a DevPulse account using the **Sign in** menu.
+2. Choose **Add repository** and enter a public GitHub repository URL or `owner/name`.
+3. Choose **Sync GitHub**. A sync reads up to 30 recent runs and five recent deployments, and keeps previously collected records in SQLite.
+4. Filter the workflow table or select a run to view the job and step timeline. DevPulse identifies test steps by name, summarizes their outcomes, and links to the full GitHub logs. The test summary counts steps, since workflow job metadata does not contain individual test cases.
+
+Public repository data works without a token, subject to GitHub's unauthenticated API rate limit. Optionally set `DEVPULSE_GITHUB_TOKEN` for higher limits. Use a read-only GitHub credential with Actions, deployments, and repository metadata access. Keep it server-side.
+
+For webhook-driven workflow updates, set `DEVPULSE_WEBHOOK_SECRET` and configure a repository webhook for **Workflow runs** using your HTTPS base URL plus `/api/webhooks/github`. Choose JSON and set the same secret. Deployment history refreshes when you sync.
+
+## Test
+
+```bash
+python -m pytest -q -W error
+node --check frontend/script.js
 ```
 
-If SQLite becomes unavailable while the service is running, the endpoint returns HTTP 503. The interactive API explorer is available at [/docs](http://127.0.0.1:8000/docs). Stop the server with Ctrl+C.
+The automated tests use temporary SQLite databases. They cover health checks, schema startup, authentication, repository isolation, duplicate sync, workflow details, and webhook signatures.
 
-## Database
+## Docker
 
-FastAPI creates `data/devpulse.sqlite3` and its tables on startup. To use a different location, set the optional `DEVPULSE_DB_PATH` environment variable before starting the server. In PowerShell, use `$env:DEVPULSE_DB_PATH = 'data/local.sqlite3'`. In Bash, use `export DEVPULSE_DB_PATH=data/local.sqlite3`. Relative paths resolve from the project root. The `.env.example` file serves as a reference.
+Use Docker Compose v2.24 or newer. Copy `.env.example` to `.env` if you need to change settings.
 
-| Model | Table | Records |
-| --- | --- | --- |
-| `User` | `users` | Accounts with a password hash field |
-| `Repository` | `repositories` | GitHub repositories connected by a user |
-| `WorkflowRun` | `workflow_runs` | Workflow attempts, statuses, conclusions, and timestamps |
-| `Deployment` | `deployments` | Versions, deployment statuses, and timestamps |
-| `SyncHistory` | `sync_history` | Repository sync outcomes and timestamps |
+```bash
+docker compose up -d --build --wait
+docker compose ps
+docker compose logs -f devpulse
+```
 
-Each user can connect multiple repositories. Repositories own their workflow runs, deployments, and sync records. Store timestamps in UTC. Startup creates missing tables. Changes to existing tables will need a migration once the schema evolves.
+The dashboard binds to loopback and stores data in the `devpulse_data` volume.
 
-## Run tests
+## GitHub Actions and deployment
 
-Run `python -m pytest` with your virtual environment active. If you used its Python executable directly during setup, use `.\.venv\Scripts\python.exe -m pytest` on Windows or `.venv/bin/python -m pytest` on macOS or Linux. Tests use temporary SQLite files.
+[The delivery workflow](.github/workflows/delivery.yml) runs automated tests, builds and smoke-tests the container, and pushes tested `main` images to GHCR with the commit SHA as the tag. Pull requests run tests and the container smoke check.
 
-## Later phases
+To enable Linux deployment, provision a server with Docker Compose and SSH access. Configure an HTTPS reverse proxy to forward requests to `127.0.0.1:8000`. Prepare the service environment in `~/devpulse/.env` on the server. Set `DEVPULSE_SECURE_COOKIES=1` for HTTPS and optionally set `DEVPULSE_ALLOW_SIGNUP=0` after creating accounts. If GHCR keeps the package private, authenticate Docker on the server with an account that can read that package.
 
-The planned dashboard, authentication, GitHub repository sync, and pipeline views will build on this foundation. GitHub Actions workflows belong in `.github/workflows/`. The future `Dockerfile` and `docker-compose.yml` will live in the project root alongside the GHCR publishing and deployment setup.
+Create a GitHub environment called `production` with these secrets.
+
+| Secret | Value |
+| --- | --- |
+| `DEVPULSE_SSH_HOST` | Linux server hostname |
+| `DEVPULSE_SSH_USER` | Deployment account with Docker access |
+| `DEVPULSE_SSH_KEY` | Private key for that account |
+| `DEVPULSE_SSH_KNOWN_HOSTS` | Verified SSH host key line for the target |
+
+Set the repository variable `DEVPULSE_DEPLOY_ENABLED` to `true` after the server is ready. The deployment job pulls the tested image and waits for the container health check. Verify the public dashboard and `/health` through your HTTPS proxy.
+
+## Project layout
+
+| Path | Purpose |
+| --- | --- |
+| `frontend/` | Dashboard HTML, CSS, and JavaScript |
+| `backend/main.py` | App setup, API routing, health check, and static files |
+| `backend/database.py`, `backend/models.py` | SQLite and SQLAlchemy schema |
+| `backend/auth.py`, `backend/routers/api.py` | Accounts, sessions, repository APIs, and webhooks |
+| `backend/services/github.py` | GitHub REST requests and database updates |
+| `backend/tests/` | Pytest suite |
+| `.github/workflows/delivery.yml` | CI, image publishing, and Linux deployment |
+| `Dockerfile`, `docker-compose.yml` | Container image and persistent local service |

@@ -79,3 +79,27 @@ class SyncHistory(Base):
     status: Mapped[str] = mapped_column(String(32))
 
     repository: Mapped[Repository] = relationship(back_populates="sync_records")
+
+
+class BrowserSession(Base):
+    __tablename__ = "browser_sessions"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+    user: Mapped[User] = relationship()
+
+
+class GitHubDeployment(Base):
+    __tablename__ = "github_deployments"
+    __table_args__ = (UniqueConstraint("repository_id", "github_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    repository_id: Mapped[int] = mapped_column(ForeignKey("repositories.id"), index=True)
+    github_id: Mapped[int] = mapped_column(BigInteger)
+    environment: Mapped[str] = mapped_column(String(255))
+    version: Mapped[str] = mapped_column(String(255))
+    commit_sha: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32))
+    updated_at: Mapped[datetime] = mapped_column(DateTime)

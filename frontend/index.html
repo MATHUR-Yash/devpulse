@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0e1220">
+  <title>DevPulse — Pipeline overview</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/script.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="DevPulse home"><span class="brand-icon" aria-hidden="true">⌁</span>Dev<span>Pulse</span></a>
+    <nav aria-label="Dashboard"><a href="#overview">Overview</a><a href="#workflows">Workflows</a><a href="#deployments">Deployments</a></nav>
+    <button class="secondary" id="account">Sign in</button>
+  </header>
+  <main id="main">
+    <section class="heading" id="overview">
+      <div><p id="context" class="context"></p><h1>Pipeline overview</h1><p class="muted" id="subtitle"></p></div>
+      <div class="controls">
+        <label for="repository" class="sr-only">Repository</label>
+        <select id="repository"></select>
+        <button class="secondary" id="connect" hidden>Add repository</button>
+        <button class="primary" id="sync" hidden>Sync GitHub</button>
+      </div>
+    </section>
+    <p id="notice" class="notice" role="status" hidden></p>
+    <div id="metrics" class="metrics" aria-label="Workflow statistics"></div>
+    <section class="overview-grid">
+      <article class="panel">
+        <div class="panel-head"><div><h2>Workflow activity</h2><p>Latest 7 active days</p></div><div class="legend"><span>Passed</span><span>Failed</span><span>Other</span></div></div>
+        <div id="chart"></div>
+      </article>
+      <article class="panel">
+        <div class="panel-head"><div><h2>Needs attention</h2><p>Latest failed workflow</p></div></div>
+        <div id="attention" class="attention"></div>
+      </article>
+    </section>
+    <section id="workflows" class="panel history">
+      <div class="panel-head"><div><h2>Workflow runs</h2><p>Select a run to inspect its stages and test steps.</p></div>
+        <label class="sr-only" for="filter">Filter workflow runs</label>
+        <select id="filter"><option value="all">All statuses</option><option value="success">Passed</option><option value="failure">Failed</option><option value="active">In progress</option></select>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>Workflow</th><th>Status</th><th>Branch</th><th>Commit</th><th>Started</th><th>Duration</th></tr></thead><tbody id="runs"></tbody></table></div>
+    </section>
+    <section id="deployments" class="panel history">
+      <div class="panel-head"><div><h2>Deployment history</h2><p>Environments, versions, and deployment timestamps.</p></div></div>
+      <div class="table-wrap"><table><thead><tr><th>Environment</th><th>Version</th><th>Status</th><th>Updated</th></tr></thead><tbody id="deployment-rows"></tbody></table></div>
+    </section>
+  </main>
+  <dialog id="dialog" aria-labelledby="dialog-title">
+    <div class="panel-head"><h2 id="dialog-title"></h2><form method="dialog"><button class="secondary" aria-label="Close">Close</button></form></div>
+    <div id="dialog-content"></div>
+  </dialog>
+</body>
+</html>

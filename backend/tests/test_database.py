@@ -25,6 +25,8 @@ def test_startup_creates_all_tables(tmp_path):
         "workflow_runs",
         "deployments",
         "sync_history",
+        "browser_sessions",
+        "github_deployments",
     }
 
 

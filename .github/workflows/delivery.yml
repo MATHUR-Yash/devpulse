@@ -1,0 +1,94 @@
+name: CI and delivery
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test Python and JavaScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pytest -q -W error
+      - run: node --check frontend/script.js
+
+  build:
+    name: Build and smoke test Docker image
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.ref.outputs.image }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Choose image tag
+        id: ref
+        shell: bash
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}:$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+      - name: Build and test
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+        run: |
+          docker build -t "$IMAGE" .
+          docker run -d --name devpulse-test -p 127.0.0.1:8000:8000 "$IMAGE"
+          curl --retry 12 --retry-connrefused --retry-delay 2 --fail --silent --show-error http://127.0.0.1:8000/health
+          curl --fail --silent --show-error http://127.0.0.1:8000/ | grep -q "Pipeline overview"
+      - if: failure()
+        run: docker logs devpulse-test || true
+      - name: Sign in to GHCR
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish tested image
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+        run: docker push "$IMAGE"
+
+  deploy:
+    name: Deploy to Linux
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DEVPULSE_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: devpulse-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - name: Update the service and wait for health
+        env:
+          SSH_HOST: ${{ secrets.DEVPULSE_SSH_HOST }}
+          SSH_USER: ${{ secrets.DEVPULSE_SSH_USER }}
+          SSH_KEY: ${{ secrets.DEVPULSE_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DEVPULSE_SSH_KNOWN_HOSTS }}
+          IMAGE: ${{ needs.build.outputs.image }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${SSH_HOST:?}" "${SSH_USER:?}" "${SSH_KEY:?}" "${SSH_KNOWN_HOSTS:?}"
+          [[ "$SSH_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]]
+          [[ "$SSH_USER" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]
+          umask 077
+          temp="$(mktemp -d)"
+          trap 'rm -rf -- "$temp"' EXIT
+          printf '%s\n' "$SSH_KEY" > "$temp/key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$temp/known_hosts"
+          ssh -i "$temp/key" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$temp/known_hosts" "$SSH_USER@$SSH_HOST" \
+            "mkdir -p ~/devpulse && cd ~/devpulse && cat > docker-compose.yml && DEVPULSE_IMAGE='$IMAGE' docker compose up -d --pull always --no-build --wait --wait-timeout 120" < docker-compose.yml

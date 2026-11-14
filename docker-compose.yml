@@ -1,0 +1,17 @@
+services:
+  devpulse:
+    image: ${DEVPULSE_IMAGE:-devpulse:local}
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DEVPULSE_DB_PATH: /app/data/devpulse.sqlite3
+    ports:
+      - "127.0.0.1:${DEVPULSE_PORT:-8000}:8000"
+    volumes:
+      - devpulse_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  devpulse_data:
