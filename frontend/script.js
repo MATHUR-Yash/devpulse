@@ -2,6 +2,7 @@
 
 const $ = (id) => document.getElementById(id);
 const state = { user: null, repos: [], repository: "demo", runs: [], deployments: [] };
+let performanceChart;
 const demoRuns = [
   ["Build and test", "failure", "feat/deploy-preview", "c8ae19b", 0, 222],
   ["Deploy to production", "success", "main", "b7ad22c", 0, 96],
@@ -73,10 +74,19 @@ function timestamp(value) {
   return value ? new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "—";
 }
 
-function elapsed(run) {
-  if (!run.started_at || !run.completed_at) return "—";
-  const seconds = Math.max(0, Math.round((new Date(run.completed_at) - new Date(run.started_at)) / 1000));
+function durationSeconds(run) {
+  if (!run.started_at || !run.completed_at) return null;
+  const seconds = (Date.parse(run.completed_at) - Date.parse(run.started_at)) / 1000;
+  return Number.isFinite(seconds) && seconds >= 0 ? Math.round(seconds) : null;
+}
+
+function formatDuration(seconds) {
+  if (seconds === null) return "—";
   return Math.floor(seconds / 60) + "m " + String(seconds % 60).padStart(2, "0") + "s";
+}
+
+function elapsed(run) {
+  return formatDuration(durationSeconds(run));
 }
 
 function notice(message = "") {
@@ -120,6 +130,114 @@ function renderChart() {
     labels.append(element("span", date.slice(5).replace("-", "/")));
   }
   chart.append(bars, labels);
+}
+
+function renderPerformance() {
+  const byDay = new Map();
+  for (const run of state.runs) {
+    if (!run.started_at || run.status !== "completed") continue;
+    const day = run.started_at.slice(0, 10);
+    const entry = byDay.get(day) || { passed: 0, failed: 0, seconds: 0, measured: 0 };
+    const result = outcome(run);
+    if (result === "success") entry.passed++;
+    if (result === "failure") entry.failed++;
+    const seconds = durationSeconds(run);
+    if (seconds !== null) {
+      entry.seconds += seconds;
+      entry.measured++;
+    }
+    byDay.set(day, entry);
+  }
+  const days = [...byDay].sort(([a], [b]) => a.localeCompare(b)).slice(-7).map(
+    ([date, { passed, failed, seconds, measured }]) => ({
+      date,
+      duration: measured ? Math.round(seconds / measured) : null,
+      rate: passed + failed ? Math.round(100 * passed / (passed + failed)) : null,
+    }),
+  );
+  performanceChart?.destroy();
+  performanceChart = undefined;
+  const container = $("performance");
+  const rows = $("performance-rows");
+  container.replaceChildren();
+  rows.replaceChildren();
+  $("performance-data").hidden = !days.length;
+  if (!days.length) {
+    container.append(element("p", "Performance appears when workflows complete.", "empty"));
+    return;
+  }
+  for (const { date, duration, rate } of days) {
+    const row = element("tr");
+    addCell(row, date);
+    addCell(row, formatDuration(duration));
+    addCell(row, rate === null ? "—" : rate + "%");
+    rows.append(row);
+  }
+  if (typeof Chart === "undefined") {
+    $("performance-data").open = true;
+    return;
+  }
+  const frame = element("div", "", "performance-frame");
+  const canvas = element("canvas");
+  canvas.setAttribute("role", "img");
+  canvas.setAttribute("aria-label", "Daily average duration and pass rate. Data table follows.");
+  frame.append(canvas);
+  container.append(frame);
+  performanceChart = new Chart(canvas, {
+    type: "line",
+    data: {
+      labels: days.map(({ date }) => date.slice(5)),
+      datasets: [
+        { label: "Average duration", data: days.map(({ duration }) => duration), borderColor: "#c7baff", yAxisID: "duration" },
+        { label: "Pass rate", data: days.map(({ rate }) => rate), borderColor: "#62e4bd", yAxisID: "rate" },
+      ],
+    },
+    options: {
+      maintainAspectRatio: false,
+      animation: false,
+      color: "#aab6ce",
+      scales: {
+        x: { grid: { color: "#293247" }, ticks: { color: "#aab6ce" } },
+        duration: { beginAtZero: true, grid: { color: "#293247" }, ticks: { color: "#c7baff", callback: (value) => value + "s" } },
+        rate: { position: "right", min: 0, max: 100, grid: { drawOnChartArea: false }, ticks: { color: "#62e4bd", callback: (value) => value + "%" } },
+      },
+    },
+  });
+}
+
+function notificationItems() {
+  return [
+    ...state.runs.filter((run) => outcome(run) === "failure").map((run) => ({
+      key: "run-" + run.id,
+      title: run.name + " failed",
+      at: run.completed_at || run.started_at,
+      run,
+    })),
+    ...state.deployments.filter((item) => item.status === "success").map((item) => ({
+      key: "deployment-" + (item.id ?? item.version) + "-" + item.updated_at,
+      title: item.environment + " deployment succeeded",
+      at: item.updated_at,
+    })),
+  ].sort((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0));
+}
+
+function renderNotifications() {
+  const feed = $("attention");
+  feed.replaceChildren();
+  const items = notificationItems().slice(0, 5);
+  if (!items.length) {
+    feed.append(element("p", "No failure or deployment alerts yet.", "empty"));
+    return;
+  }
+  const list = element("ul", "", "notifications");
+  for (const item of items) {
+    const row = element("li");
+    row.append(badge(item.run ? "failure" : "success"), element("strong", item.title),
+      element("time", timestamp(item.at), "quiet"));
+    if (item.run) row.append(button("Inspect failure", () => showRun(item.run), "run-link"));
+    list.append(row);
+  }
+  feed.append(list);
 }
 
 function emptyRow(text, columns) {
@@ -178,18 +296,8 @@ function render() {
     metrics.append(card);
   }
   renderChart();
-  const attention = $("attention");
-  attention.replaceChildren();
-  const latest = state.runs.find((run) => outcome(run) === "failure");
-  if (latest) {
-    const alert = element("div", "", "alert");
-    alert.append(badge(latest.conclusion, "failure"), element("h3", latest.name),
-      element("p", demo ? "The test step failed, so the deployment stage was skipped." : "Inspect the stages to see which job or step failed."),
-      button("Inspect failure", () => showRun(latest)));
-    attention.append(alert);
-  } else {
-    attention.append(element("p", "No failed workflows in the current history.", "empty"));
-  }
+  renderPerformance();
+  renderNotifications();
   renderRuns();
   const deployments = $("deployment-rows");
   deployments.replaceChildren();
@@ -211,7 +319,7 @@ function selectOptions() {
   selector.value = state.repository;
 }
 
-async function loadRepository() {
+async function loadRepository({ announce = false } = {}) {
   const chosen = state.repository;
   if (chosen === "demo") {
     state.runs = demoRuns;
@@ -225,10 +333,21 @@ async function loadRepository() {
   }
   const data = await api("/repositories/" + chosen + "/dashboard");
   if (state.repository !== chosen) return;
+  const previous = new Set(notificationItems().map(({ key }) => key));
+  const changed = JSON.stringify([state.runs, state.deployments, state.lastSync])
+    !== JSON.stringify([data.runs, data.deployments, data.last_sync]);
+  if (!changed) return;
   state.runs = data.runs;
   state.deployments = data.deployments;
   state.lastSync = data.last_sync;
   render();
+  if (announce) {
+    const incoming = notificationItems().filter(({ key }) => !previous.has(key));
+    if (incoming.length) {
+      $("notification-update").hidden = false;
+      $("notification-update").textContent = incoming.map(({ title }) => title).join(". ");
+    }
+  }
 }
 
 function dialog(title) {
@@ -376,6 +495,7 @@ $("repository").addEventListener("change", async (event) => {
   state.runs = [];
   state.deployments = [];
   state.lastSync = null;
+  $("notification-update").hidden = true;
   notice();
   render();
   try { await loadRepository(); } catch (error) { notice(error.message); }
@@ -385,6 +505,7 @@ $("connect").addEventListener("click", () => {
     const added = await api("/repositories", values);
     state.repos = await api("/repositories");
     state.repository = String(added.id);
+    $("notification-update").hidden = true;
     selectOptions();
     notice();
     await loadRepository();
@@ -397,7 +518,7 @@ $("sync").addEventListener("click", async () => {
   try {
     const count = await api("/repositories/" + repo + "/sync", undefined, "POST");
     if (state.repository !== repo) return;
-    await loadRepository();
+    await loadRepository({ announce: true });
     notice("Synced " + count.runs + " workflow runs and " + count.deployments + " deployments.");
   } catch (error) {
     if (state.repository === repo) notice(error.message);
@@ -405,6 +526,15 @@ $("sync").addEventListener("click", async () => {
     $("sync").disabled = false;
   }
 });
+
+setInterval(async () => {
+  if (state.repository === "demo" || document.hidden || $("sync").disabled) return;
+  try {
+    await loadRepository({ announce: true });
+  } catch {
+    // The next refresh retries. Manual sync reports connection errors.
+  }
+}, 15000);
 
 selectOptions();
 loadRepository();

@@ -6,13 +6,14 @@
   <meta name="theme-color" content="#0e1220">
   <title>DevPulse — Pipeline overview</title>
   <link rel="stylesheet" href="/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.6.1/dist/chart.umd.min.js" integrity="sha384-Emf5ZVIUiarAdhkgtqK+5/Z5qIvM6QoVrS+qAVtfyZVuD5lIHrac0me485+Antp0" crossorigin="anonymous" defer></script>
   <script src="/script.js" defer></script>
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
   <header class="topbar">
     <a class="brand" href="/" aria-label="DevPulse home"><span class="brand-icon" aria-hidden="true">⌁</span>Dev<span>Pulse</span></a>
-    <nav aria-label="Dashboard"><a href="#overview">Overview</a><a href="#workflows">Workflows</a><a href="#deployments">Deployments</a></nav>
+    <nav aria-label="Dashboard"><a href="#overview">Overview</a><a href="#analytics">Analytics</a><a href="#workflows">Workflows</a><a href="#deployments">Deployments</a></nav>
     <button class="secondary" id="account">Sign in</button>
   </header>
   <main id="main">
@@ -26,6 +27,7 @@
       </div>
     </section>
     <p id="notice" class="notice" role="status" hidden></p>
+    <p id="notification-update" class="notice" role="status" hidden></p>
     <div id="metrics" class="metrics" aria-label="Workflow statistics"></div>
     <section class="overview-grid">
       <article class="panel">
@@ -33,9 +35,16 @@
         <div id="chart"></div>
       </article>
       <article class="panel">
-        <div class="panel-head"><div><h2>Needs attention</h2><p>Latest failed workflow</p></div></div>
+        <div class="panel-head"><div><h2>Notifications</h2><p>Workflow failures and successful deployments</p></div></div>
         <div id="attention" class="attention"></div>
       </article>
+    </section>
+    <section id="analytics" class="panel history">
+      <div class="panel-head"><div><h2>Workflow performance</h2><p>Average run duration and pass rate by day, in UTC.</p></div></div>
+      <div id="performance"></div>
+      <details id="performance-data" hidden><summary>View performance data</summary>
+        <div class="table-wrap"><table><thead><tr><th>Date (UTC)</th><th>Average duration</th><th>Pass rate</th></tr></thead><tbody id="performance-rows"></tbody></table></div>
+      </details>
     </section>
     <section id="workflows" class="panel history">
       <div class="panel-head"><div><h2>Workflow runs</h2><p>Select a run to inspect its stages and test steps.</p></div>

@@ -76,3 +76,32 @@ def test_webhook_requires_a_valid_signature_and_updates_workflow(tmp_path, monke
             "X-Hub-Signature-256": "sha256=" + signature, "X-GitHub-Event": "workflow_run",
         }).status_code == 204
         assert client.get(f"/api/repositories/{repo['id']}/dashboard").json()["runs"][0]["conclusion"] == "failure"
+
+
+def test_deployment_webhooks_keep_the_latest_status(tmp_path, monkeypatch):
+    monkeypatch.setenv("DEVPULSE_WEBHOOK_SECRET", "local-test-secret")
+    monkeypatch.setattr(api, "github_get", lambda *_args, **_kwargs: {
+        "id": 10, "private": False, "owner": {"login": "example"}, "name": "demo",
+    })
+    payload = {
+        "repository": {"id": 10, "private": False},
+        "deployment": {
+            "id": 7, "environment": "production", "sha": "a" * 40, "ref": "v1",
+        },
+    }
+    with TestClient(create_app(tmp_path / "test.sqlite3")) as client:
+        assert register(client, "alice").status_code == 201
+        repo = client.post("/api/repositories", json={"repository": "example/demo"}).json()
+        for state, minute in [("success", "02"), ("in_progress", "01"), ("success", "02")]:
+            payload["deployment_status"] = {
+                "state": state, "created_at": f"2026-11-13T10:{minute}:00Z",
+            }
+            body = json.dumps(payload).encode()
+            signature = hmac.new(b"local-test-secret", body, hashlib.sha256).hexdigest()
+            response = client.post("/api/webhooks/github", content=body, headers={
+                "X-Hub-Signature-256": "sha256=" + signature,
+                "X-GitHub-Event": "deployment_status",
+            })
+            assert response.status_code == 204
+        deployments = client.get(f"/api/repositories/{repo['id']}/dashboard").json()["deployments"]
+        assert [(item["id"], item["status"]) for item in deployments] == [(7, "success")]

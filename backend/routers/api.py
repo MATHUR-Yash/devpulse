@@ -18,7 +18,9 @@ from starlette.concurrency import run_in_threadpool
 
 from ..auth import COOKIE, SESSION_AGE, current_user, password_hash, token_hash, utc_now, verify_password
 from ..models import BrowserSession, GitHubDeployment, Repository, SyncHistory, User, WorkflowRun
-from ..services.github import collect_deployments, github_get, repository_path, save_deployment, save_run
+from ..services.github import (
+    collect_deployments, deployment_values, github_get, repository_path, save_deployment, save_run,
+)
 
 router = APIRouter(prefix="/api")
 REPO_PATTERN = re.compile(r"([A-Za-z0-9-]{1,39})/([A-Za-z0-9_.-]{1,100})")
@@ -204,15 +206,22 @@ def run_details(repository_id: int, run_id: int, request: Request, db: DB):
     } for job in jobs["jobs"]]}
 
 
-def apply_webhook(engine, payload) -> None:
+def apply_webhook(engine, event: str, payload: dict) -> None:
     repository = payload.get("repository", {})
-    run = payload.get("workflow_run")
-    if not run or repository.get("private") is not False or not repository.get("id"):
+    if repository.get("private") is not False or not repository.get("id"):
+        return
+    run = payload.get("workflow_run") if event == "workflow_run" else None
+    deployment = payload.get("deployment") if event == "deployment_status" else None
+    status = payload.get("deployment_status")
+    if not run and not (deployment and status):
         return
     with Session(engine) as db:
         repo_ids = db.scalars(select(Repository.id).where(Repository.github_repo_id == repository["id"])).all()
         for repository_id in repo_ids:
-            save_run(db, repository_id, run)
+            if run:
+                save_run(db, repository_id, run)
+            else:
+                save_deployment(db, repository_id, deployment_values(deployment, status))
         db.commit()
 
 
@@ -225,5 +234,6 @@ async def webhook(request: Request):
     signature = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(signature, request.headers.get("X-Hub-Signature-256", "")):
         raise HTTPException(403, "Invalid webhook signature.")
-    if request.headers.get("X-GitHub-Event") == "workflow_run":
-        await run_in_threadpool(apply_webhook, request.app.state.engine, await request.json())
+    event = request.headers.get("X-GitHub-Event")
+    if event in {"workflow_run", "deployment_status"}:
+        await run_in_threadpool(apply_webhook, request.app.state.engine, event, await request.json())

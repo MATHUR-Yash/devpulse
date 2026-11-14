@@ -52,15 +52,19 @@ def collect_deployments(base: str) -> list[dict]:
     for item in deployments:
         updates = github_get(f"{base}/deployments/{item['id']}/statuses", per_page=1)
         latest = updates[0] if updates else {}
-        results.append({
-            "github_id": item["id"],
-            "environment": item["environment"],
-            "version": item.get("ref") or item["sha"],
-            "commit_sha": item["sha"],
-            "status": latest.get("state", "pending"),
-            "updated_at": parse_time(latest.get("created_at") or item["created_at"]),
-        })
+        results.append(deployment_values(item, latest))
     return results
+
+
+def deployment_values(deployment: dict, status: dict) -> dict:
+    return {
+        "github_id": deployment["id"],
+        "environment": status.get("environment") or deployment["environment"],
+        "version": deployment.get("ref") or deployment["sha"],
+        "commit_sha": deployment["sha"],
+        "status": status.get("state", "pending"),
+        "updated_at": parse_time(status.get("created_at") or deployment["created_at"]),
+    }
 
 
 def save_run(db: Session, repository_id: int, run: dict) -> None:
