@@ -40,14 +40,15 @@ jobs:
         run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}:$GITHUB_SHA" >> "$GITHUB_OUTPUT"
       - name: Build and test
         env:
-          IMAGE: ${{ steps.ref.outputs.image }}
+          DEVPULSE_IMAGE: ${{ steps.ref.outputs.image }}
         run: |
-          docker build -t "$IMAGE" .
-          docker run -d --name devpulse-test -p 127.0.0.1:8000:8000 "$IMAGE"
-          curl --retry 12 --retry-connrefused --retry-delay 2 --fail --silent --show-error http://127.0.0.1:8000/health
-          curl --fail --silent --show-error http://127.0.0.1:8000/ | grep -q "Pipeline overview"
+          docker build -t "$DEVPULSE_IMAGE" .
+          docker compose up -d --no-build --wait --wait-timeout 90
+          curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8000/health
+          curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8000/ -o "$RUNNER_TEMP/devpulse.html"
+          grep -q "Pipeline overview" "$RUNNER_TEMP/devpulse.html"
       - if: failure()
-        run: docker logs devpulse-test || true
+        run: docker compose logs --no-color devpulse || true
       - name: Sign in to GHCR
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: docker/login-action@v4
