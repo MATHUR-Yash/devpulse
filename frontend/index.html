@@ -1,66 +1,26 @@
 <!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0e1220">
-  <title>DevPulse — Pipeline overview</title>
-  <link rel="stylesheet" href="/style.css">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.6.1/dist/chart.umd.min.js" integrity="sha384-Emf5ZVIUiarAdhkgtqK+5/Z5qIvM6QoVrS+qAVtfyZVuD5lIHrac0me485+Antp0" crossorigin="anonymous" defer></script>
-  <script src="/script.js" defer></script>
-</head>
-<body>
-  <a class="skip" href="#main">Skip to content</a>
-  <header class="topbar">
-    <a class="brand" href="/" aria-label="DevPulse home"><span class="brand-icon" aria-hidden="true">⌁</span>Dev<span>Pulse</span></a>
-    <nav aria-label="Dashboard"><a href="#overview">Overview</a><a href="#analytics">Analytics</a><a href="#workflows">Workflows</a><a href="#deployments">Deployments</a></nav>
-    <button class="secondary" id="account">Sign in</button>
-  </header>
-  <main id="main">
-    <section class="heading" id="overview">
-      <div><p id="context" class="context"></p><h1>Pipeline overview</h1><p class="muted" id="subtitle"></p></div>
-      <div class="controls">
-        <label for="repository" class="sr-only">Repository</label>
-        <select id="repository"></select>
-        <button class="secondary" id="connect" hidden>Add repository</button>
-        <button class="primary" id="sync" hidden>Sync GitHub</button>
-      </div>
-    </section>
-    <p id="notice" class="notice" role="status" hidden></p>
-    <p id="notification-update" class="notice" role="status" hidden></p>
-    <div id="metrics" class="metrics" aria-label="Workflow statistics"></div>
-    <section class="overview-grid">
-      <article class="panel">
-        <div class="panel-head"><div><h2>Workflow activity</h2><p>Latest 7 active days</p></div><div class="legend"><span>Passed</span><span>Failed</span><span>Other</span></div></div>
-        <div id="chart"></div>
-      </article>
-      <article class="panel">
-        <div class="panel-head"><div><h2>Notifications</h2><p>Workflow failures and successful deployments</p></div></div>
-        <div id="attention" class="attention"></div>
-      </article>
-    </section>
-    <section id="analytics" class="panel history">
-      <div class="panel-head"><div><h2>Workflow performance</h2><p>Average run duration and pass rate by day, in UTC.</p></div></div>
-      <div id="performance"></div>
-      <details id="performance-data" hidden><summary>View performance data</summary>
-        <div class="table-wrap"><table><thead><tr><th>Date (UTC)</th><th>Average duration</th><th>Pass rate</th></tr></thead><tbody id="performance-rows"></tbody></table></div>
-      </details>
-    </section>
-    <section id="workflows" class="panel history">
-      <div class="panel-head"><div><h2>Workflow runs</h2><p>Select a run to inspect its stages and test steps.</p></div>
-        <label class="sr-only" for="filter">Filter workflow runs</label>
-        <select id="filter"><option value="all">All statuses</option><option value="success">Passed</option><option value="failure">Failed</option><option value="active">In progress</option></select>
-      </div>
-      <div class="table-wrap"><table><thead><tr><th>Workflow</th><th>Status</th><th>Branch</th><th>Commit</th><th>Started</th><th>Duration</th></tr></thead><tbody id="runs"></tbody></table></div>
-    </section>
-    <section id="deployments" class="panel history">
-      <div class="panel-head"><div><h2>Deployment history</h2><p>Environments, versions, and deployment timestamps.</p></div></div>
-      <div class="table-wrap"><table><thead><tr><th>Environment</th><th>Version</th><th>Status</th><th>Updated</th></tr></thead><tbody id="deployment-rows"></tbody></table></div>
-    </section>
-  </main>
-  <dialog id="dialog" aria-labelledby="dialog-title">
-    <div class="panel-head"><h2 id="dialog-title"></h2><form method="dialog"><button class="secondary" aria-label="Close">Close</button></form></div>
-    <div id="dialog-content"></div>
-  </dialog>
-</body>
-</html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#242321">
+<title>DevPulse — Delivery health</title><meta name="description" content="Pipeline overview, workflow failures, test results and deployment history in one workspace."><link rel="stylesheet" href="/style.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.6.1/dist/chart.umd.min.js" integrity="sha384-Emf5ZVIUiarAdhkgtqK+5/Z5qIvM6QoVrS+qAVtfyZVuD5lIHrac0me485+Antp0" crossorigin="anonymous" defer></script><script src="/script.js" defer></script>
+</head><body>
+<a class="skip" href="#main">Skip to content</a>
+<aside class="sidebar"><a class="brand" href="/" aria-label="DevPulse home"><span class="brand-icon" aria-hidden="true">‹/›</span>DevPulse</a>
+<button id="menu" class="menu-button" aria-expanded="false" aria-controls="navigation">Menu</button>
+<nav id="navigation" aria-label="Dashboard"><a href="#overview" aria-current="page"><span aria-hidden="true">⌂</span>Overview</a><a href="#workflows"><span aria-hidden="true">⑂</span>Workflows</a><a href="#deployments"><span aria-hidden="true">◇</span>Deployments</a><a href="#analytics"><span aria-hidden="true">▥</span>Analytics</a><a href="#repository-controls"><span aria-hidden="true">▣</span>Repositories</a></nav>
+<div class="sidebar-account"><span class="workspace-label">YOUR WORKSPACE</span><button id="account" class="account-button">Sign in</button><p>Pipeline monitoring,<br>all in one place.</p></div></aside>
+<header class="commandbar" id="repository-controls"><div class="controls"><label for="repository">Repository</label><select id="repository"></select><button class="secondary" id="connect" hidden>Add repository</button><button class="primary" id="sync" hidden>Sync GitHub</button></div>
+<div class="refresh-controls"><span id="sync-state" role="status"></span><label class="auto-label"><input id="auto-refresh" type="checkbox" checked>Auto-refresh</label><label class="sr-only" for="range">Workflow time range</label><select id="range"><option value="14">Last 14 days</option><option value="7">Last 7 days</option><option value="1">Last 24 hours</option><option value="all">All saved runs</option></select></div></header>
+<main id="main">
+<section class="heading" id="overview"><div><p id="context" class="context"></p><h1>Delivery health</h1><p id="subtitle" class="muted"></p></div><span id="period" class="period"></span></section>
+<p id="notice" class="notice" role="status" hidden></p><p id="notification-update" class="notice" role="status" hidden></p>
+<section class="health-hero" aria-label="Pipeline success rate"><div class="hero-metric"><div class="hero-value"><strong id="health-rate">—</strong><span id="health-label" class="health-label"></span></div><p id="rate-caption">Pipeline success rate</p><div id="metrics" class="metrics" aria-label="Workflow statistics"></div></div><div class="health-trend"><div id="chart"></div><details id="trend-data"><summary>View success-rate data</summary><div id="trend-table"></div></details></div></section>
+<section class="pipeline-band" aria-label="Latest pipeline"><div><h2>Pipeline status</h2><p id="latest-run" class="quiet"></p></div><div id="pipeline" class="pipeline"></div></section>
+<section class="exceptions"><div class="panel-head"><div><h2>Action needed <span id="exception-count" class="count"></span></h2><p>Failed workflows that may need your attention.</p></div><a href="#workflows" id="view-failures">View failed workflows →</a></div><div id="attention" class="attention"></div></section>
+<section id="workflows" class="history"><div class="panel-head"><div><h2>Recent workflows</h2><p>CI/CD runs across branches in the selected period.</p></div><div class="workflow-actions"><span id="run-count" class="quiet"></span><label class="sr-only" for="filter">Filter workflow runs</label><select id="filter"><option value="all">All statuses</option><option value="success">Passed</option><option value="failure">Failed</option><option value="active">In progress</option></select></div></div><div class="table-wrap"><table><thead><tr><th>Workflow</th><th>Status</th><th>Branch</th><th>Commit</th><th>Started</th><th>Duration</th></tr></thead><tbody id="runs"></tbody></table></div><button id="more-runs" class="text-button" hidden>Show all workflows</button></section>
+<section id="deployments" class="panel history"><div class="deployment-band"><div><h2>Deployment history</h2><p id="deployment-count" class="quiet"></p></div><div id="deployment-summary"></div></div><details class="deployment-details"><summary>View all deployment records</summary><div class="table-wrap"><table><thead><tr><th>Environment</th><th>Version</th><th>Status</th><th>Updated</th></tr></thead><tbody id="deployment-rows"></tbody></table></div></details></section>
+<section id="analytics" class="history"><div class="panel-head"><div><h2>Workflow performance</h2><p>Average run duration and pass rate by active day, in UTC.</p></div></div><div id="performance"></div><details id="performance-data" hidden><summary>View performance data</summary><div class="table-wrap"><table><thead><tr><th>Date (UTC)</th><th>Average duration</th><th>Pass rate</th></tr></thead><tbody id="performance-rows"></tbody></table></div></details></section>
+<footer>DevPulse <span>Build with confidence. Deliver with clarity.</span></footer>
+</main>
+<dialog id="dialog" aria-labelledby="dialog-title"><div class="panel-head"><h2 id="dialog-title"></h2><form method="dialog"><button class="secondary" aria-label="Close">Close</button></form></div><div id="dialog-content"></div></dialog>
+</body></html>
