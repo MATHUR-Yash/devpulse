@@ -17,6 +17,9 @@ from starlette.concurrency import run_in_threadpool
 
 from ..auth import COOKIE, SESSION_AGE, current_user, password_hash, token_hash, utc_now, verify_password
 from ..database import insert_for
+from ..services.junit import read_cases
+from ..services.oauth import session_id
+from ..models import RepositoryHook, PrivateRepository
 from ..models import BrowserSession, GitHubDeployment, Repository, SyncHistory, User, WorkflowRun
 from ..services.github import (
     collect_deployments, deployment_values, github_get, repository_path, save_deployment, save_run,
@@ -54,7 +57,7 @@ def open_session(db: Session, user: User, response: Response) -> dict:
     db.commit()
     response.set_cookie(
         COOKIE, token, max_age=int(SESSION_AGE.total_seconds()), httponly=True,
-        samesite="lax", secure=os.getenv("DEVPULSE_SECURE_COOKIES") == "1",
+        samesite="lax", secure=os.getenv("DEVPULSE_SECURE_COOKIES") == "1" or bool(os.getenv("RENDER")),
     )
     return {"username": user.username}
 
@@ -83,12 +86,27 @@ def login(data: Credentials, response: Response, db: DB):
 
 @router.get("/auth/me")
 def me(request: Request, db: DB):
-    return {"username": current_user(request, db).username}
+    return {"username": current_user(request, db).username,
+            "github_configured": all(os.getenv("DEVPULSE_GITHUB_" + key)
+                                     for key in ("CLIENT_ID", "CLIENT_SECRET", "CALLBACK_URL"))}
+
+
+@router.get("/auth/github/connect")
+def github_connect(request: Request, db: DB):
+    current_user(request, db)
+    return request.app.state.github_sessions.begin(session_id(request))
+
+
+@router.get("/auth/github/callback")
+def github_callback(request: Request, db: DB, code: str, state: str):
+    current_user(request, db)
+    return request.app.state.github_sessions.finish(session_id(request), code, state)
 
 
 @router.post("/auth/logout", status_code=204)
 def logout(request: Request, response: Response, db: DB):
     if token := request.cookies.get(COOKIE):
+        request.app.state.github_sessions.forget(token_hash(token))
         db.execute(delete(BrowserSession).where(BrowserSession.token_hash == token_hash(token)))
         db.commit()
     response.delete_cookie(COOKIE)
@@ -106,6 +124,18 @@ def own_repo(db: Session, request: Request, repository_id: int) -> Repository:
     return repo
 
 
+def repository_access(repo, request, db, *, verify_public=True):
+    private = db.get(PrivateRepository, repo.id) is not None
+    token = request.app.state.github_sessions.token(session_id(request)) if private else None
+    if private and not token:
+        raise HTTPException(403, "Connect your GitHub account to access this private repository.")
+    if private or verify_public:
+        info = github_get(repository_path(repo), token=token)
+        if info["id"] != repo.github_repo_id or (info["private"] and not token):
+            raise HTTPException(403, "Repository identity or visibility changed. Reconnect it.")
+    return token
+
+
 @router.get("/repositories")
 def repositories(request: Request, db: DB):
     user = current_user(request, db)
@@ -120,10 +150,10 @@ def connect_repository(data: RepositoryInput, request: Request, db: DB):
     if not REPO_PATTERN.fullmatch(name) or name.split("/")[1] in {".", ".."}:
         raise HTTPException(422, "Enter a GitHub repository as owner/name.")
     db.rollback()
-    info = github_get(f"/repos/{name}")
-    # The server credential is shared. Limit monitoring to public repositories.
-    if info["private"]:
-        raise HTTPException(403, "DevPulse monitors public GitHub repositories.")
+    token = request.app.state.github_sessions.token(session_id(request))
+    info = github_get(f"/repos/{name}", token=token)
+    if info["private"] and not token:
+        raise HTTPException(403, "Connect your GitHub account to monitor private repositories.")
     stmt = insert_for(db, Repository).values(
         user_id=user_id, github_repo_id=info["id"], owner=info["owner"]["login"], name=info["name"]
     )
@@ -133,20 +163,22 @@ def connect_repository(data: RepositoryInput, request: Request, db: DB):
     ))
     row = db.scalar(select(Repository).where(Repository.user_id == user_id, Repository.github_repo_id == info["id"]))
     result = repo_data(row)
+    if info["private"]:
+        db.merge(PrivateRepository(repository_id=row.id))
     db.commit()
     return result
 
 
 @router.post("/repositories/{repository_id}/sync")
 def sync(repository_id: int, request: Request, db: DB):
-    base = repository_path(own_repo(db, request, repository_id))
-    db.rollback()
+    repo = own_repo(db, request, repository_id)
+    base = repository_path(repo)
     try:
         # Recheck visibility when repositories change after being connected.
-        if github_get(base)["private"]:
-            raise HTTPException(403, "This repository is no longer public.")
-        runs = github_get(f"{base}/actions/runs", per_page=30)["workflow_runs"]
-        deployments = collect_deployments(base)
+        token = repository_access(repo, request, db)
+        db.rollback()
+        runs = github_get(f"{base}/actions/runs", token=token, per_page=30)["workflow_runs"]
+        deployments = collect_deployments(base, token=token)
     except HTTPException:
         db.add(SyncHistory(repository_id=repository_id, status="failure"))
         db.commit()
@@ -166,7 +198,8 @@ def utc_iso(value):
 
 @router.get("/repositories/{repository_id}/dashboard")
 def dashboard(repository_id: int, request: Request, db: DB):
-    own_repo(db, request, repository_id)
+    repo = own_repo(db, request, repository_id)
+    repository_access(repo, request, db, verify_public=False)
     runs = db.scalars(select(WorkflowRun).where(WorkflowRun.repository_id == repository_id)
         .order_by(WorkflowRun.github_run_id.desc(), WorkflowRun.run_attempt.desc()).limit(100)).all()
     deployments = db.scalars(select(GitHubDeployment).where(GitHubDeployment.repository_id == repository_id)
@@ -190,15 +223,15 @@ def dashboard(repository_id: int, request: Request, db: DB):
 
 @router.get("/repositories/{repository_id}/runs/{run_id}")
 def run_details(repository_id: int, run_id: int, request: Request, db: DB):
-    base = repository_path(own_repo(db, request, repository_id))
+    repo = own_repo(db, request, repository_id)
+    base = repository_path(repo)
     run = db.get(WorkflowRun, run_id)
     if run is None or run.repository_id != repository_id:
         raise HTTPException(404, "Workflow run was not found.")
     github_id, attempt = run.github_run_id, run.run_attempt
+    token = repository_access(repo, request, db)
     db.rollback()
-    if github_get(base)["private"]:
-        raise HTTPException(403, "This repository is no longer public.")
-    jobs = github_get(f"{base}/actions/runs/{github_id}/attempts/{attempt}/jobs", per_page=100)
+    jobs = github_get(f"{base}/actions/runs/{github_id}/attempts/{attempt}/jobs", token=token, per_page=100)
     return {"url": f"https://github.com{base.removeprefix('/repos')}/actions/runs/{github_id}", "jobs": [{
         "name": job["name"], "status": job["status"], "conclusion": job.get("conclusion"),
         "started_at": job.get("started_at"), "completed_at": job.get("completed_at"),
@@ -206,7 +239,29 @@ def run_details(repository_id: int, run_id: int, request: Request, db: DB):
     } for job in jobs["jobs"]]}
 
 
-def apply_webhook(engine, event: str, payload: dict) -> None:
+@router.get("/repositories/{repository_id}/runs/{run_id}/tests")
+def test_report(repository_id: int, run_id: int, request: Request, db: DB):
+    repo = own_repo(db, request, repository_id)
+    base = repository_path(repo)
+    run = db.get(WorkflowRun, run_id)
+    if run is None or run.repository_id != repo.id:
+        raise HTTPException(404, "Workflow run was not found.")
+    github_id, attempt = run.github_run_id, run.run_attempt
+    token = repository_access(repo, request, db)
+    db.rollback()
+    return read_cases(base, github_id, attempt, token)
+
+
+@router.post("/repositories/{repository_id}/webhook")
+def generate_webhook(repository_id: int, request: Request, db: DB):
+    own_repo(db, request, repository_id)
+    secret = secrets.token_urlsafe(32)
+    db.merge(RepositoryHook(repository_id=repository_id, secret=secret))
+    db.commit()
+    return {"path": f"/api/webhooks/github/{repository_id}", "secret": secret}
+
+
+def apply_webhook(engine, event: str, payload: dict, target: int | None = None) -> None:
     repository = payload.get("repository", {})
     if repository.get("private") is not False or not repository.get("id"):
         return
@@ -216,7 +271,10 @@ def apply_webhook(engine, event: str, payload: dict) -> None:
     if not run and not (deployment and status):
         return
     with Session(engine) as db:
-        repo_ids = db.scalars(select(Repository.id).where(Repository.github_repo_id == repository["id"])).all()
+        query = select(Repository.id).where(Repository.github_repo_id == repository["id"])
+        if target is not None:
+            query = query.where(Repository.id == target)
+        repo_ids = db.scalars(query).all()
         for repository_id in repo_ids:
             if run:
                 save_run(db, repository_id, run)
@@ -225,15 +283,31 @@ def apply_webhook(engine, event: str, payload: dict) -> None:
         db.commit()
 
 
+def hook_secret(engine, target):
+    with Session(engine) as db:
+        return db.scalar(select(RepositoryHook.secret).where(RepositoryHook.repository_id == target))
+
+
 @router.post("/webhooks/github", status_code=204)
-async def webhook(request: Request):
-    secret = os.getenv("DEVPULSE_WEBHOOK_SECRET")
+@router.post("/webhooks/github/{repository_id}", status_code=204)
+async def webhook(request: Request, repository_id: int | None = None):
+    secret = (await run_in_threadpool(hook_secret, request.app.state.engine, repository_id)
+              if repository_id is not None else os.getenv("DEVPULSE_WEBHOOK_SECRET"))
     if not secret:
         raise HTTPException(503, "GitHub webhooks are disabled.")
-    body = await request.body()
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > 2 * 1024 * 1024:
+            raise HTTPException(413, "Webhook exceeds 2 MiB.")
+        body.extend(chunk)
     signature = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(signature, request.headers.get("X-Hub-Signature-256", "")):
         raise HTTPException(403, "Invalid webhook signature.")
     event = request.headers.get("X-GitHub-Event")
     if event in {"workflow_run", "deployment_status"}:
-        await run_in_threadpool(apply_webhook, request.app.state.engine, event, await request.json())
+        import json
+        try:
+            payload = json.loads(body)
+            await run_in_threadpool(apply_webhook, request.app.state.engine, event, payload, repository_id)
+        except (ValueError, KeyError, TypeError, AttributeError):
+            raise HTTPException(422, "Invalid GitHub event.") from None

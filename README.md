@@ -1,6 +1,6 @@
 # DevPulse
 
-DevPulse visualizes GitHub Actions runs and deployment history across public repositories. Open the built-in demo immediately, or create an account to connect and sync a GitHub repository.
+DevPulse visualizes GitHub Actions runs and deployment history across public repositories. A configured GitHub App also supports private repository monitoring. Open the built-in demo or create an account to connect a repository.
 
 ## Run locally
 
@@ -99,3 +99,7 @@ Set the repository variable `DEVPULSE_DEPLOY_ENABLED` to `true` after the server
 | `backend/tests/` | Pytest suite |
 | `.github/workflows/delivery.yml` | CI, image publishing, and Render or Linux deployment |
 | `Dockerfile`, `docker-compose.yml` | Container image and persistent local service |
+
+## Monitoring and operations
+
+See [operator instructions](docs/operations.md) for JUnit reports, repository webhooks, private GitHub access and PostgreSQL recovery. The [UX study kit](docs/ux-coursework.md) includes editable design frames and a participant worksheet.

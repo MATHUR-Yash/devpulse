@@ -34,10 +34,29 @@ jobs:
           python-version: "3.13"
           cache: pip
       - run: python -m pip install -r requirements.txt
-      - run: python -m pytest -q -W error
+      - run: python -m pytest -q -W error --junitxml=reports/junit.xml
         env:
           DEVPULSE_TEST_POSTGRES_URL: postgresql://devpulse:test-only@127.0.0.1:5432/devpulse_test
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: devpulse-junit-${{ github.run_attempt }}
+          path: reports/junit.xml
+          if-no-files-found: warn
       - run: node --check frontend/script.js
+      - name: Restore a backup into a disposable database
+        env:
+          PGHOST: 127.0.0.1
+          PGUSER: devpulse
+          PGPASSWORD: test-only
+          PGDATABASE: devpulse_test
+        run: |
+          container="${{ job.services.postgres.id }}"
+          docker cp scripts/backup.sh "$container:/tmp/backup.sh"
+          archive=$(docker exec -e PGHOST -e PGUSER -e PGPASSWORD -e PGDATABASE "$container" bash /tmp/backup.sh /tmp/backup)
+          docker exec -e PGUSER -e PGPASSWORD "$container" createdb restore_check
+          docker exec -e PGUSER -e PGPASSWORD "$container" pg_restore --exit-on-error --single-transaction -d restore_check "$archive"
+          docker exec -e PGUSER -e PGPASSWORD "$container" psql -d restore_check -Atc 'select count(*) from workflow_runs' | grep -Ex '[1-9][0-9]*'
 
   build:
     name: Build and smoke test Docker image

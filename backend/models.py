@@ -58,6 +58,17 @@ class WorkflowRun(Base):
     repository: Mapped[Repository] = relationship(back_populates="workflow_runs")
 
 
+class RepositoryHook(Base):
+    __tablename__ = "repository_hooks"
+    repository_id: Mapped[int] = mapped_column(ForeignKey("repositories.id"), primary_key=True)
+    secret: Mapped[str] = mapped_column(String(100))
+
+
+class PrivateRepository(Base):
+    __tablename__ = "private_repositories"
+    repository_id: Mapped[int] = mapped_column(ForeignKey("repositories.id"), primary_key=True)
+
+
 class Deployment(Base):
     __tablename__ = "deployments"
 

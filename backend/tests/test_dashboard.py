@@ -35,7 +35,7 @@ def test_account_repository_sync_and_workflow_timeline(tmp_path, monkeypatch):
         }[path]
 
     monkeypatch.setattr(api, "github_get", github)
-    monkeypatch.setattr(api, "collect_deployments", lambda _: [])
+    monkeypatch.setattr(api, "collect_deployments", lambda _, token=None: [])
     with TestClient(create_app(tmp_path / "test.sqlite3")) as client:
         assert "Pipeline overview" in client.get("/").text
         assert client.get("/api/repositories").status_code == 401

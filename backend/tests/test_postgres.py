@@ -28,7 +28,7 @@ def test_postgres_keeps_workflow_and_deployment_history_across_restarts(monkeypa
         }]},
     }
     monkeypatch.setattr(api, "github_get", lambda path, **_params: responses[path])
-    monkeypatch.setattr(api, "collect_deployments", lambda _base: [
+    monkeypatch.setattr(api, "collect_deployments", lambda _base, token=None: [
         api.deployment_values(
             {"id": 19, "environment": "production", "sha": "a" * 40, "created_at": sync_time},
             {"state": "success"},
