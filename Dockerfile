@@ -8,6 +8,8 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && chown devpulse /app/data
 COPY backend ./backend
 COPY frontend ./frontend
+ARG DEVPULSE_REVISION
+ENV DEVPULSE_REVISION=${DEVPULSE_REVISION}
 USER devpulse
 EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s \

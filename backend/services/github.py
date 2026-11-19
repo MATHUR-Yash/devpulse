@@ -6,9 +6,9 @@ from datetime import datetime, timezone
 import httpx2
 from fastapi import HTTPException
 from sqlalchemy import or_
-from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
+from ..database import insert_for
 from ..models import GitHubDeployment, Repository, WorkflowRun
 
 
@@ -80,7 +80,7 @@ def save_run(db: Session, repository_id: int, run: dict) -> None:
         "started_at": parse_time(run.get("run_started_at")),
         "completed_at": parse_time(run.get("updated_at")) if run["status"] == "completed" else None,
     }
-    stmt = insert(WorkflowRun).values(**values)
+    stmt = insert_for(db, WorkflowRun).values(**values)
     db.execute(stmt.on_conflict_do_update(
         index_elements=["repository_id", "github_run_id", "run_attempt"],
         set_={key: stmt.excluded[key] for key in values if key != "repository_id"},
@@ -95,7 +95,7 @@ def save_run(db: Session, repository_id: int, run: dict) -> None:
 
 
 def save_deployment(db: Session, repository_id: int, values: dict) -> None:
-    stmt = insert(GitHubDeployment).values(repository_id=repository_id, **values)
+    stmt = insert_for(db, GitHubDeployment).values(repository_id=repository_id, **values)
     db.execute(stmt.on_conflict_do_update(
         index_elements=["repository_id", "github_id"],
         set_={key: stmt.excluded[key] for key in values if key != "github_id"},

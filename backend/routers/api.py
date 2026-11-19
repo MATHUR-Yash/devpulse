@@ -11,12 +11,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
-from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from ..auth import COOKIE, SESSION_AGE, current_user, password_hash, token_hash, utc_now, verify_password
+from ..database import insert_for
 from ..models import BrowserSession, GitHubDeployment, Repository, SyncHistory, User, WorkflowRun
 from ..services.github import (
     collect_deployments, deployment_values, github_get, repository_path, save_deployment, save_run,
@@ -124,7 +124,7 @@ def connect_repository(data: RepositoryInput, request: Request, db: DB):
     # The server credential is shared. Limit monitoring to public repositories.
     if info["private"]:
         raise HTTPException(403, "DevPulse monitors public GitHub repositories.")
-    stmt = insert(Repository).values(
+    stmt = insert_for(db, Repository).values(
         user_id=user_id, github_repo_id=info["id"], owner=info["owner"]["login"], name=info["name"]
     )
     db.execute(stmt.on_conflict_do_update(

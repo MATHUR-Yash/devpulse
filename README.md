@@ -28,7 +28,7 @@ Open the [dashboard](http://127.0.0.1:8000/), [API docs](http://127.0.0.1:8000/d
 
 1. Create a DevPulse account using the **Sign in** menu.
 2. Choose **Add repository** and enter a public GitHub repository URL or `owner/name`.
-3. Choose **Sync GitHub**. A sync reads up to 30 recent runs and five recent deployments, and keeps previously collected records in SQLite.
+3. Choose **Sync GitHub**. A sync reads up to 30 recent runs and five recent GitHub deployment records, and preserves previously collected records in the configured database. Historical failures stay visible in the workflow table and notification feed.
 4. Filter the workflow table or select a run to view the job and step timeline. DevPulse identifies test steps by name, summarizes their outcomes, and links to the full GitHub logs. The test summary counts steps, since workflow job metadata does not contain individual test cases.
 
 Public repository data works without a token, subject to GitHub's unauthenticated API rate limit. Optionally set `DEVPULSE_GITHUB_TOKEN` for higher limits. Use a read-only GitHub credential with Actions, deployments, and repository metadata access. Keep it server-side.
@@ -46,7 +46,7 @@ python -m pytest -q -W error
 node --check frontend/script.js
 ```
 
-The automated tests use temporary SQLite databases. They cover health checks, schema startup, authentication, repository isolation, duplicate sync, workflow details, and webhook signatures.
+The automated tests cover health checks, schema startup, authentication, repository isolation, duplicate sync, workflow details, and webhook signatures using temporary SQLite databases. CI also tests persistence across app restarts with a disposable PostgreSQL service. Set `DEVPULSE_TEST_POSTGRES_URL` to a dedicated test database to run that test locally.
 
 ## Docker
 
@@ -63,6 +63,16 @@ The dashboard binds to loopback and stores data in the `devpulse_data` volume.
 ## GitHub Actions and deployment
 
 [The delivery workflow](.github/workflows/delivery.yml) runs automated tests, builds and smoke-tests the container, and pushes tested `main` images to GHCR with the commit SHA as the tag. Pull requests run tests and the container smoke check.
+
+### Render
+
+For an existing image-backed Render service, connect a PostgreSQL database before enabling automatic deployments if account and repository history need to survive restarts. Set `DEVPULSE_DATABASE_URL` in the service environment to the database's direct connection URL, using the provider's TLS settings, and set `DEVPULSE_SECURE_COOKIES=1` for HTTPS. The app initializes the schema on startup. This starts with the configured database's contents. Back up and migrate any SQLite data that still needs to be retained before switching. Render Free uses an ephemeral filesystem, and its free PostgreSQL databases expire after 30 days.
+
+1. Copy the service's deploy hook from its Render settings into the GitHub **production** environment secret `DEVPULSE_RENDER_DEPLOY_HOOK`. Treat the hook as a credential.
+2. Set the repository variable `DEVPULSE_RENDER_URL` to the service's HTTPS `onrender.com` URL and `DEVPULSE_DEPLOY_TARGET` to `render`.
+3. Push to `main` or run **CI and delivery** from GitHub Actions. The job requests the exact published image and checks that the healthy public instance reports the matching commit. GitHub records the result on the production environment.
+
+### Self-hosted Linux
 
 To enable Linux deployment, provision a server with Docker Compose and SSH access. Configure an HTTPS reverse proxy to forward requests to `127.0.0.1:8000`. Prepare the service environment in `~/devpulse/.env` on the server. Set `DEVPULSE_SECURE_COOKIES=1` for HTTPS and optionally set `DEVPULSE_ALLOW_SIGNUP=0` after creating accounts. If GHCR keeps the package private, authenticate Docker on the server with an account that can read that package.
 
@@ -83,9 +93,9 @@ Set the repository variable `DEVPULSE_DEPLOY_ENABLED` to `true` after the server
 | --- | --- |
 | `frontend/` | Dashboard HTML, CSS, and JavaScript |
 | `backend/main.py` | App setup, API routing, health check, and static files |
-| `backend/database.py`, `backend/models.py` | SQLite and SQLAlchemy schema |
+| `backend/database.py`, `backend/models.py` | SQLite and PostgreSQL connections and SQLAlchemy schema |
 | `backend/auth.py`, `backend/routers/api.py` | Accounts, sessions, repository APIs, and webhooks |
 | `backend/services/github.py` | GitHub REST requests and database updates |
 | `backend/tests/` | Pytest suite |
-| `.github/workflows/delivery.yml` | CI, image publishing, and Linux deployment |
+| `.github/workflows/delivery.yml` | CI, image publishing, and Render or Linux deployment |
 | `Dockerfile`, `docker-compose.yml` | Container image and persistent local service |

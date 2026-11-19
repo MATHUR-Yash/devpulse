@@ -7,7 +7,8 @@ from backend.database import create_database_engine
 from backend.main import create_app
 
 
-def test_health_reports_a_working_database(tmp_path):
+def test_health_reports_a_working_database_and_revision(tmp_path, monkeypatch):
+    monkeypatch.setenv("DEVPULSE_REVISION", "a" * 40)
     app = create_app(tmp_path / "nested" / "test.sqlite3")
 
     with TestClient(app) as client:
@@ -15,6 +16,8 @@ def test_health_reports_a_working_database(tmp_path):
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "database": "ok"}
+    assert response.headers["X-DevPulse-Revision"] == "a" * 40
+    assert response.headers["Cache-Control"] == "no-store"
 
 
 def test_health_returns_503_if_the_database_query_fails(tmp_path, monkeypatch):

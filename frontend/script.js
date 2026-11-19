@@ -195,9 +195,10 @@ function renderPerformance() {
     options: {
       maintainAspectRatio: false,
       animation: false,
+      elements: { point: { radius: days.length === 1 ? 6 : 3 } },
       color: "#aab6ce",
       scales: {
-        x: { grid: { color: "#293247" }, ticks: { color: "#aab6ce" } },
+        x: { offset: days.length === 1, grid: { color: "#293247" }, ticks: { color: "#aab6ce" } },
         duration: { beginAtZero: true, grid: { color: "#293247" }, ticks: { color: "#c7baff", callback: (value) => value + "s" } },
         rate: { position: "right", min: 0, max: 100, grid: { drawOnChartArea: false }, ticks: { color: "#62e4bd", callback: (value) => value + "%" } },
       },
@@ -301,7 +302,7 @@ function render() {
   renderRuns();
   const deployments = $("deployment-rows");
   deployments.replaceChildren();
-  if (!state.deployments.length) deployments.append(emptyRow("No deployment records yet.", 4));
+  if (!state.deployments.length) deployments.append(emptyRow("No GitHub deployment records for this repository.", 4));
   for (const item of state.deployments) {
     const row = element("tr");
     addCell(row, item.environment);
@@ -333,6 +334,7 @@ async function loadRepository({ announce = false } = {}) {
   }
   const data = await api("/repositories/" + chosen + "/dashboard");
   if (state.repository !== chosen) return;
+  const hasBaseline = Boolean(state.lastSync);
   const previous = new Set(notificationItems().map(({ key }) => key));
   const changed = JSON.stringify([state.runs, state.deployments, state.lastSync])
     !== JSON.stringify([data.runs, data.deployments, data.last_sync]);
@@ -341,7 +343,7 @@ async function loadRepository({ announce = false } = {}) {
   state.deployments = data.deployments;
   state.lastSync = data.last_sync;
   render();
-  if (announce) {
+  if (announce && hasBaseline) {
     const incoming = notificationItems().filter(({ key }) => !previous.has(key));
     if (incoming.length) {
       $("notification-update").hidden = false;
@@ -514,12 +516,14 @@ $("connect").addEventListener("click", () => {
 $("sync").addEventListener("click", async () => {
   const repo = state.repository;
   $("sync").disabled = true;
+  $("notification-update").hidden = true;
   notice("Syncing workflows and deployments…");
   try {
     const count = await api("/repositories/" + repo + "/sync", undefined, "POST");
     if (state.repository !== repo) return;
-    await loadRepository({ announce: true });
-    notice("Synced " + count.runs + " workflow runs and " + count.deployments + " deployments.");
+    await loadRepository();
+    if (state.repository !== repo) return;
+    notice("Synced " + count.runs + " workflow runs and " + count.deployments + " GitHub deployments.");
   } catch (error) {
     if (state.repository === repo) notice(error.message);
   } finally {

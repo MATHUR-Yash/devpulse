@@ -13,6 +13,20 @@ jobs:
   test:
     name: Test Python and JavaScript
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: devpulse_test
+          POSTGRES_USER: devpulse
+          POSTGRES_PASSWORD: test-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U devpulse -d devpulse_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -21,6 +35,8 @@ jobs:
           cache: pip
       - run: python -m pip install -r requirements.txt
       - run: python -m pytest -q -W error
+        env:
+          DEVPULSE_TEST_POSTGRES_URL: postgresql://devpulse:test-only@127.0.0.1:5432/devpulse_test
       - run: node --check frontend/script.js
 
   build:
@@ -42,9 +58,11 @@ jobs:
         env:
           DEVPULSE_IMAGE: ${{ steps.ref.outputs.image }}
         run: |
-          docker build -t "$DEVPULSE_IMAGE" .
+          docker build --build-arg "DEVPULSE_REVISION=$GITHUB_SHA" -t "$DEVPULSE_IMAGE" .
           docker compose up -d --no-build --wait --wait-timeout 90
-          curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8000/health
+          curl --fail --silent --show-error --max-time 10 \
+            --dump-header "$RUNNER_TEMP/devpulse-health.headers" http://127.0.0.1:8000/health
+          tr -d '\r' < "$RUNNER_TEMP/devpulse-health.headers" | grep -ix "x-devpulse-revision: $GITHUB_SHA"
           curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8000/ -o "$RUNNER_TEMP/devpulse.html"
           grep -q "Pipeline overview" "$RUNNER_TEMP/devpulse.html"
       - if: failure()
@@ -62,10 +80,66 @@ jobs:
           IMAGE: ${{ steps.ref.outputs.image }}
         run: docker push "$IMAGE"
 
+  deploy-render:
+    name: Deploy to Render and verify revision
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DEVPULSE_DEPLOY_TARGET == 'render'
+    runs-on: ubuntu-latest
+    timeout-minutes: 16
+    environment:
+      name: production
+      url: ${{ vars.DEVPULSE_RENDER_URL }}
+    concurrency:
+      group: devpulse-production
+      cancel-in-progress: false
+    steps:
+      - name: Deploy the tested image
+        env:
+          DEPLOY_HOOK: ${{ secrets.DEVPULSE_RENDER_DEPLOY_HOOK }}
+          IMAGE: ${{ needs.build.outputs.image }}
+          PUBLIC_URL: ${{ vars.DEVPULSE_RENDER_URL }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" != "$GITHUB_SHA" ]]; then
+            echo "::error::This revision is no longer at the tip of main."
+            exit 1
+          fi
+          if [[ ! "$DEPLOY_HOOK" =~ ^https://api\.render\.com/deploy/srv-[a-zA-Z0-9]+\?key=[a-zA-Z0-9_-]+$ ]]; then
+            echo "::error::Set DEVPULSE_RENDER_DEPLOY_HOOK to this service's Render deploy hook."
+            exit 1
+          fi
+          if [[ ! "$PUBLIC_URL" =~ ^https://[a-zA-Z0-9-]+\.onrender\.com/?$ ]]; then
+            echo "::error::Set DEVPULSE_RENDER_URL to the HTTPS onrender.com service URL."
+            exit 1
+          fi
+          status=$(curl --silent --max-time 30 --output /dev/null --write-out '%{http_code}' \
+            --request POST --url "$DEPLOY_HOOK" --url-query "imgURL=$IMAGE") || status=000
+          if [[ "$status" != 200 && "$status" != 202 ]]; then
+            echo "::error::Render did not accept the deploy request (HTTP $status)."
+            exit 1
+          fi
+
+          health_url="${PUBLIC_URL%/}/health"
+          headers="$RUNNER_TEMP/render-health.headers"
+          deadline=$((SECONDS + 780))
+          while (( SECONDS < deadline )); do
+            if curl --fail --silent --max-time 10 --output /dev/null \
+                --dump-header "$headers" "$health_url" &&
+                tr -d '\r' < "$headers" | grep -ix "x-devpulse-revision: $GITHUB_SHA"; then
+              echo "Render is serving healthy revision $GITHUB_SHA."
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::Render did not serve the expected healthy revision. Check the Render deploy logs."
+          exit 1
+
   deploy:
     name: Deploy to Linux
     needs: build
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DEVPULSE_DEPLOY_ENABLED == 'true'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DEVPULSE_DEPLOY_ENABLED == 'true' && vars.DEVPULSE_DEPLOY_TARGET != 'render'
     runs-on: ubuntu-latest
     environment: production
     concurrency:
