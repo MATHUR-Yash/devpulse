@@ -3,6 +3,12 @@
 const $ = (id) => document.getElementById(id);
 const state = { user: null, repos: [], repository: "demo", runs: [], deployments: [] };
 let performanceChart;
+let showAllRuns = false;
+let pipelineKey = "";
+function periodRuns() {
+  const days = $("range").value;
+  return state.runs.filter((run) => days === "all" || (run.started_at && Date.parse(run.started_at) >= Date.now() - Number(days) * 86400000));
+}
 const demoRuns = [
   ["Build and test", "failure", "feat/deploy-preview", "c8ae19b", 0, 222],
   ["Deploy to production", "success", "main", "b7ad22c", 0, 96],
@@ -67,7 +73,8 @@ function outcome(run) {
 }
 
 function badge(value, kind = value) {
-  return element("span", String(value || "pending").replaceAll("_", " "), "badge " + kind);
+  const labels = { success: "Succeeded", failure: "Failed", in_progress: "In progress", queued: "Queued", skipped: "Skipped", cancelled: "Cancelled" };
+  return element("span", labels[value] || String(value || "unknown").replaceAll("_", " "), "badge " + kind);
 }
 
 function timestamp(value) {
@@ -94,47 +101,106 @@ function notice(message = "") {
   $("notice").hidden = !message;
 }
 
-function renderChart() {
-  const days = new Map();
-  for (const run of state.runs) {
-    if (!run.started_at) continue;
-    const date = run.started_at.slice(0, 10);
-    const data = days.get(date) || { success: 0, failure: 0, other: 0 };
-    const kind = outcome(run);
-    data[kind === "active" ? "other" : kind]++;
-    days.set(date, data);
-  }
-  const recent = [...days].sort(([a], [b]) => a.localeCompare(b)).slice(-7);
+function renderHealthTrend() {
   const chart = $("chart");
   chart.replaceChildren();
-  if (!recent.length) {
-    chart.append(element("p", "Workflow activity appears after a sync.", "empty"));
+  const days = new Map();
+  for (const run of periodRuns()) {
+    if (!run.started_at || !["success", "failure"].includes(outcome(run))) continue;
+    const date = run.started_at.slice(0, 10);
+    const totals = days.get(date) || { passed: 0, eligible: 0 };
+    totals.eligible++;
+    if (outcome(run) === "success") totals.passed++;
+    days.set(date, totals);
+  }
+  const points = [...days].sort(([a], [b]) => a.localeCompare(b));
+  $("trend-table").replaceChildren();
+  $("trend-data").hidden = !points.length;
+  if (!points.length) {
+    chart.append(element("p", "No completed workflows in this period. Sync a repository to get started.", "empty"));
     return;
   }
-  const max = Math.max(...recent.map(([, data]) => data.success + data.failure + data.other));
-  const bars = element("div", "", "bars");
-  const labels = element("div", "", "bar-labels");
-  for (const [date, data] of recent) {
-    const group = element("div", "", "bar-group");
-    const description = date + ": " + data.success + " passed, " + data.failure + " failed, " + data.other + " other";
-    group.title = description;
-    group.setAttribute("role", "img");
-    group.setAttribute("aria-label", description);
-    for (const [kind, css] of [["other", "other"], ["failure", "fail"], ["success", "pass"]]) {
-      if (!data[kind]) continue;
-      const segment = element("span", "", css);
-      segment.style.height = Math.round(data[kind] / max * 132) + "px";
-      group.append(segment);
-    }
-    bars.append(group);
-    labels.append(element("span", date.slice(5).replace("-", "/")));
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  const width = Math.max(280, chart.clientWidth);
+  svg.setAttribute("viewBox", "0 0 " + width + " 115");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Daily pipeline success rate. Exact dates and counts in the data table below.");
+  function shape(tag, attributes) {
+    const item = document.createElementNS(svg.namespaceURI, tag);
+    for (const [key, value] of Object.entries(attributes)) item.setAttribute(key, value);
+    svg.append(item);
+    return item;
   }
-  chart.append(bars, labels);
+  for (const value of [0, 50, 100]) {
+    const y = 88 - value * .75;
+    shape("line", { x1: 40, y1: y, x2: width - 15, y2: y, class: "trend-grid" });
+    shape("text", { x: 0, y: y + 4, class: "trend-label" }).textContent = value + "%";
+  }
+  const coordinates = points.map(([, counts], i) => [points.length === 1 ? width / 2 : 45 + i / (points.length - 1) * (width - 65), 88 - counts.passed / counts.eligible * 75]);
+  shape("polyline", { points: coordinates.map((p) => p.join(",")).join(" "), class: "trend-path" });
+  const table = element("table");
+  const head = element("thead");
+  const header = element("tr");
+  for (const title of ["Date (UTC)", "Passed / eligible", "Pass rate"]) header.append(element("th", title));
+  head.append(header);
+  table.append(head);
+  const body = element("tbody");
+  points.forEach(([date, counts], index) => {
+    const [cx, cy] = coordinates[index];
+    const dot = shape("circle", { cx, cy, r: 3.5, class: "trend-point" });
+    const title = document.createElementNS(svg.namespaceURI, "title");
+    title.textContent = date + " · " + counts.passed + "/" + counts.eligible + " passed · " + Math.round(counts.passed / counts.eligible * 100) + "%";
+    dot.append(title);
+    if (index === 0 || index === points.length - 1 || index % Math.ceil(points.length / (width < 500 ? 3 : 6)) === 0) {
+      shape("text", { x: cx, y: 111, "text-anchor": "middle", class: "trend-label" }).textContent = date.slice(5);
+    }
+    const row = element("tr");
+    addCell(row, date);
+    addCell(row, counts.passed + " / " + counts.eligible);
+    addCell(row, Math.round(counts.passed / counts.eligible * 100) + "%");
+    body.append(row);
+  });
+  table.append(body);
+  $("trend-table").append(table);
+  chart.append(svg);
+}
+
+async function renderPipeline() {
+  const run = periodRuns()[0];
+  const repo = state.repository;
+  const key = repo + ":" + (run ? [run.id, run.status, run.conclusion].join(":") : "empty");
+  if (key === pipelineKey) return;
+  pipelineKey = key;
+  const container = $("pipeline");
+  container.replaceChildren();
+  $("latest-run").replaceChildren();
+  if (!run) {
+    container.append(element("p", "No workflow runs in this period.", "quiet"));
+    return;
+  }
+  $("latest-run").append(button(run.name + " · " + (run.branch || "Unknown branch"), () => showRun(run), "run-link"));
+  container.append(badge(run.conclusion || run.status, outcome(run)), element("span", "Loading stages…", "quiet"));
+  try {
+    const data = repo === "demo" ? { jobs: [{ name: run.name, status: run.status, conclusion: run.conclusion }] }
+      : await api("/repositories/" + repo + "/runs/" + run.id);
+    if (pipelineKey !== key) return;
+    container.replaceChildren();
+    for (const [index, job] of data.jobs.entries()) {
+      if (index) container.append(element("span", "", "connector"));
+      const checkpoint = element("div", "", "checkpoint");
+      checkpoint.append(badge(job.conclusion || job.status, outcome(job)), element("strong", job.name, "checkpoint-name"));
+      container.append(checkpoint);
+    }
+    if (!data.jobs.length) container.append(element("p", "GitHub has no stages for this attempt yet.", "quiet"));
+  } catch (error) {
+    if (pipelineKey !== key) return;
+    container.replaceChildren(element("p", error.message, "quiet"), button("Retry stages", () => { pipelineKey = ""; renderPipeline(); }, "run-link"));
+  }
 }
 
 function renderPerformance() {
   const byDay = new Map();
-  for (const run of state.runs) {
+  for (const run of periodRuns()) {
     if (!run.started_at || run.status !== "completed") continue;
     const day = run.started_at.slice(0, 10);
     const entry = byDay.get(day) || { passed: 0, failed: 0, seconds: 0, measured: 0 };
@@ -188,19 +254,19 @@ function renderPerformance() {
     data: {
       labels: days.map(({ date }) => date.slice(5)),
       datasets: [
-        { label: "Average duration", data: days.map(({ duration }) => duration), borderColor: "#c7baff", yAxisID: "duration" },
-        { label: "Pass rate", data: days.map(({ rate }) => rate), borderColor: "#62e4bd", yAxisID: "rate" },
+        { label: "Average duration", data: days.map(({ duration }) => duration), borderColor: "#a94f35", yAxisID: "duration" },
+        { label: "Pass rate", data: days.map(({ rate }) => rate), borderColor: "#242321", yAxisID: "rate" },
       ],
     },
     options: {
       maintainAspectRatio: false,
       animation: false,
       elements: { point: { radius: days.length === 1 ? 6 : 3 } },
-      color: "#aab6ce",
+      color: "#625e57",
       scales: {
-        x: { offset: days.length === 1, grid: { color: "#293247" }, ticks: { color: "#aab6ce" } },
-        duration: { beginAtZero: true, grid: { color: "#293247" }, ticks: { color: "#c7baff", callback: (value) => value + "s" } },
-        rate: { position: "right", min: 0, max: 100, grid: { drawOnChartArea: false }, ticks: { color: "#62e4bd", callback: (value) => value + "%" } },
+        x: { offset: days.length === 1, grid: { color: "#d6d0c7" }, ticks: { color: "#625e57" } },
+        duration: { beginAtZero: true, grid: { color: "#d6d0c7" }, ticks: { color: "#a94f35", callback: (value) => value + "s" } },
+        rate: { position: "right", min: 0, max: 100, grid: { drawOnChartArea: false }, ticks: { color: "#242321", callback: (value) => value + "%" } },
       },
     },
   });
@@ -208,7 +274,7 @@ function renderPerformance() {
 
 function notificationItems() {
   return [
-    ...state.runs.filter((run) => outcome(run) === "failure").map((run) => ({
+    ...periodRuns().filter((run) => outcome(run) === "failure").map((run) => ({
       key: "run-" + run.id,
       title: run.name + " failed",
       at: run.completed_at || run.started_at,
@@ -225,9 +291,10 @@ function notificationItems() {
 function renderNotifications() {
   const feed = $("attention");
   feed.replaceChildren();
-  const items = notificationItems().slice(0, 5);
+  const items = notificationItems().filter((item) => item.run && periodRuns().some((run) => run.id === item.run.id)).slice(0, 2);
+  $("exception-count").textContent = periodRuns().filter((run) => outcome(run) === "failure").length;
   if (!items.length) {
-    feed.append(element("p", "No failure or deployment alerts yet.", "empty"));
+    feed.append(element("p", "No failed workflows in this period.", "empty"));
     return;
   }
   const list = element("ul", "", "notifications");
@@ -259,7 +326,11 @@ function renderRuns() {
   const rows = $("runs");
   rows.replaceChildren();
   const filter = $("filter").value;
-  const visible = state.runs.filter((run) => filter === "all" || outcome(run) === filter);
+  const matches = periodRuns().filter((run) => filter === "all" || outcome(run) === filter);
+  const visible = showAllRuns ? matches : matches.slice(0, 5);
+  $("run-count").textContent = matches.length + " runs";
+  $("more-runs").hidden = matches.length <= 5;
+  $("more-runs").textContent = showAllRuns ? "Show recent workflows" : "Show all " + matches.length + " workflows";
   if (!visible.length) rows.append(emptyRow("No workflow runs match this view.", 6));
   for (const run of visible) {
     const row = element("tr");
@@ -270,6 +341,7 @@ function renderRuns() {
     addCell(row, element("code", run.sha.slice(0, 7)));
     addCell(row, timestamp(run.started_at));
     addCell(row, elapsed(run));
+    [...row.children].forEach((cell, i) => cell.dataset.label = ["Workflow", "Status", "Branch", "Commit", "Started", "Duration"][i]);
     rows.append(row);
   }
 }
@@ -277,30 +349,50 @@ function renderRuns() {
 function render() {
   const demo = state.repository === "demo";
   $("context").textContent = demo ? "Demo workspace" : "GitHub Actions";
-  $("subtitle").textContent = demo ? "Sample workflow and deployment data"
-    : state.lastSync ? "Last sync " + timestamp(state.lastSync.at) + " · " + state.lastSync.status
-      : "Sync this repository to load its workflow history.";
+  const name = state.repos.find((repo) => String(repo.id) === state.repository)?.name || "acme/web-platform";
+  $("subtitle").textContent = demo ? "Explore sample workflows and deployments in the demo workspace." : "CI/CD reliability and delivery status for " + name + ".";
+  $("sync-state").textContent = demo ? "Demo data" : state.lastSync ? (state.lastSync.status === "success" ? "Synced " : "Sync failed · ") + timestamp(state.lastSync.at) : "Not synced yet";
+  $("period").textContent = $("range").selectedOptions[0].textContent;
   $("account").textContent = state.user ? state.user.username : "Sign in";
   $("connect").hidden = !state.user;
   $("sync").hidden = demo;
   const metrics = $("metrics");
   metrics.replaceChildren();
-  const passed = state.runs.filter((run) => outcome(run) === "success").length;
-  const failed = state.runs.filter((run) => outcome(run) === "failure").length;
-  const active = state.runs.filter((run) => outcome(run) === "active").length;
+  const passed = periodRuns().filter((run) => outcome(run) === "success").length;
+  const failed = periodRuns().filter((run) => outcome(run) === "failure").length;
+  const active = periodRuns().filter((run) => outcome(run) === "active").length;
   const rate = passed + failed ? Math.round(passed / (passed + failed) * 100) + "%" : "—";
-  for (const [label, value] of [["Workflow runs", state.runs.length], ["Passed", passed], ["Failed", failed], ["Pass rate", rate]]) {
+  for (const [label, value] of [["Workflow runs", periodRuns().length], ["Passed", passed], ["Failed", failed], ["Pass rate", rate]]) {
     const card = element("article", "", "metric");
     card.append(element("p", label), element("strong", value));
     if (label === "Workflow runs") card.append(element("p", active + " in progress"));
     if (label === "Pass rate") card.append(element("p", "Of passed and failed runs"));
     metrics.append(card);
   }
-  renderChart();
+  $("health-rate").textContent = rate;
+  $("health-label").textContent = passed + failed ? failed ? "Failures recorded" : "All eligible runs passed" : "Awaiting runs";
+  $("rate-caption").textContent = "Pipeline success rate · " + $("range").selectedOptions[0].textContent.toLowerCase();
+  $("health-rate").title = passed + " passed / " + (passed + failed) + " eligible runs. Running, cancelled and skipped runs are excluded.";
+  $("health-rate").tabIndex = 0;
+  $("health-rate").setAttribute("aria-label", rate + ". " + $("health-rate").title);
+  renderHealthTrend();
+  renderPipeline();
   renderPerformance();
   renderNotifications();
   renderRuns();
   const deployments = $("deployment-rows");
+  const summary = $("deployment-summary");
+  summary.replaceChildren();
+  for (const item of state.deployments.slice(0, 3)) {
+    const card = element("div", "", "deployment-item");
+    card.append(element("strong", item.version.length > 20 ? item.version.slice(0, 10) : item.version),
+      badge(item.status, item.status === "error" ? "failure" : item.status),
+      element("p", item.environment + " · " + timestamp(item.updated_at), "quiet"));
+    card.title = item.version;
+    summary.append(card);
+  }
+  if (!state.deployments.length) summary.append(element("p", "No deployments yet.", "quiet"));
+  $("deployment-count").textContent = state.deployments.length + " records";
   deployments.replaceChildren();
   if (!state.deployments.length) deployments.append(emptyRow("No GitHub deployment records for this repository.", 4));
   for (const item of state.deployments) {
@@ -534,6 +626,20 @@ function account(register = false) {
   }, { label: register ? "Use existing account" : "Create account", action: () => account(!register) });
 }
 
+$("menu").addEventListener("click", () => {
+  const expanded = document.querySelector(".sidebar").classList.toggle("open");
+  $("menu").setAttribute("aria-expanded", String(expanded));
+});
+document.querySelectorAll("nav a").forEach((link) => link.addEventListener("click", () => {
+  document.querySelectorAll("nav a").forEach((item) => item.removeAttribute("aria-current"));
+  link.setAttribute("aria-current", "page");
+  document.querySelector(".sidebar").classList.remove("open");
+  $("menu").setAttribute("aria-expanded", "false");
+}));
+$("range").addEventListener("change", () => { showAllRuns = false; render(); });
+$("more-runs").addEventListener("click", () => { showAllRuns = !showAllRuns; renderRuns(); });
+$("view-failures").addEventListener("click", () => { $("filter").value = "failure"; renderRuns(); });
+window.addEventListener("resize", () => renderHealthTrend());
 $("account").addEventListener("click", () => account());
 $("filter").addEventListener("change", renderRuns);
 $("repository").addEventListener("change", async (event) => {
@@ -579,7 +685,7 @@ const lastAutomaticSync = new Map();
 let refreshInProgress = false;
 setInterval(async () => {
   const repo = state.repository;
-  if (repo === "demo" || document.hidden || $("sync").disabled || refreshInProgress) return;
+  if (repo === "demo" || document.hidden || !$("auto-refresh").checked || $("sync").disabled || refreshInProgress) return;
   refreshInProgress = true;
   try {
     await loadRepository({ announce: true });
