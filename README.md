@@ -37,6 +37,15 @@ The **Workflow performance** chart shows daily average run duration and pass rat
 
 The in-app notification feed shows workflow failures and successful deployments for the selected repository. Open dashboards refresh saved data every 15 seconds. To receive updates between manual syncs, set `DEVPULSE_WEBHOOK_SECRET` and configure a repository webhook for **Workflow runs** and **Deployment statuses** using your HTTPS base URL plus `/api/webhooks/github`. Choose JSON and set the same secret.
 
+### Track a workflow failure
+
+1. Sign in, select a connected repository, and sync GitHub.
+2. Open a completed failed run from **Action needed** or **Recent workflows**. Use **All saved runs** if the failure is outside the default time range.
+3. In **Failure investigation**, choose **Load investigation**. Set the status to **Investigating**, enter a probable cause and optionally add notes, then save.
+4. After confirming the fix, add a resolution note and save the status as **Resolved**. The run leaves **Action needed** and stays marked **Failed** in GitHub and in workflow history. Select **Open** to reopen the investigation.
+
+Each connected repository stores a separate investigation for each failed attempt. It belongs to your DevPulse account and survives syncs and restarts with a persistent database. The demo workspace shows where investigations appear. A connected repository is required to save one.
+
 The [UX coursework notes](docs/ux-coursework.md) map the seven screens to app interactions and include a usability test plan.
 
 ## Test
