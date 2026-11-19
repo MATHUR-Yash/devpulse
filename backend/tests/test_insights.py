@@ -1,6 +1,9 @@
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+from datetime import datetime
+from backend.models import GitHubDeployment
 
 from backend.main import create_app
 from backend.routers import api
@@ -50,6 +53,13 @@ def test_insight_routes_isolate_accounts_compare_baseline_and_cache_reports(tmp_
         ready = client.get(base + "/readiness").json()
         assert not ready["ready"]
         assert not ready["checks"][0]["passed"]
+        with Session(client.app.state.engine) as db:
+            for github_id, state, minute, sha in [(1, "inactive", 2, "b" * 40), (2, "success", 1, "a" * 40)]:
+                db.add(GitHubDeployment(repository_id=repo["id"], github_id=github_id,
+                    environment="production", version=sha, commit_sha=sha, status=state,
+                    updated_at=datetime(2026, 11, 19, 10, minute)))
+            db.commit()
+        assert client.get(base + "/readiness").json()["checks"][2]["passed"]
         portfolio = client.get("/api/portfolio").json()["repositories"]
         assert portfolio[0]["failed"] == 1
         client.post("/api/auth/logout")
