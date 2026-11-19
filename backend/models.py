@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, String, UniqueConstraint, func, JSON
+from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text, UniqueConstraint, func, JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -73,6 +73,19 @@ class SavedTestReport(Base):
     __tablename__ = "saved_test_reports"
     run_id: Mapped[int] = mapped_column(ForeignKey("workflow_runs.id"), primary_key=True)
     cases: Mapped[list] = mapped_column(JSON)
+
+
+class FailureInvestigation(Base):
+    __tablename__ = "failure_investigations"
+
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("workflow_runs.id", ondelete="CASCADE"), primary_key=True,
+    )
+    status: Mapped[str] = mapped_column(String(16))
+    cause: Mapped[str] = mapped_column(String(500))
+    notes: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
 class Deployment(Base):

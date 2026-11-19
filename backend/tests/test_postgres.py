@@ -8,7 +8,7 @@ from backend.main import create_app
 from backend.routers import api
 
 
-def test_postgres_keeps_workflow_and_deployment_history_across_restarts(monkeypatch):
+def test_postgres_keeps_workflows_deployments_and_investigations_across_restarts(monkeypatch):
     database_url = os.getenv("DEVPULSE_TEST_POSTGRES_URL")
     if not database_url:
         pytest.skip("Set DEVPULSE_TEST_POSTGRES_URL to a disposable PostgreSQL database.")
@@ -22,7 +22,7 @@ def test_postgres_keeps_workflow_and_deployment_history_across_restarts(monkeypa
             "id": 12345678901,
             "head_sha": "a" * 40,
             "status": "completed",
-            "conclusion": "success",
+            "conclusion": "failure",
             "run_started_at": sync_time,
             "updated_at": sync_time,
         }]},
@@ -44,11 +44,18 @@ def test_postgres_keeps_workflow_and_deployment_history_across_restarts(monkeypa
         base = f"/api/repositories/{repo['id']}"
         for _ in range(2):
             assert client.post(f"{base}/sync").json() == {"runs": 1, "deployments": 1}
+        run = client.get(f"{base}/dashboard").json()["runs"][0]
+        path = f"{base}/runs/{run['id']}/investigation"
+        client.post(path, json={"status": "investigating", "cause": "Dependency mismatch"}).raise_for_status()
+        saved = client.post(path, json={"status": "resolved", "notes": "Pinned the dependency."})
+        saved.raise_for_status()
 
     with TestClient(create_app()) as restarted:
         assert restarted.get("/health").status_code == 200
         assert restarted.post("/api/auth/login", json=credentials).status_code == 200
         dashboard = restarted.get(f"{base}/dashboard").json()
-        assert [run["conclusion"] for run in dashboard["runs"]] == ["success"]
+        assert [run["conclusion"] for run in dashboard["runs"]] == ["failure"]
+        assert [run["investigation_status"] for run in dashboard["runs"]] == ["resolved"]
+        assert restarted.get(path).json() == saved.json()
         assert [item["status"] for item in dashboard["deployments"]] == ["success"]
         assert dashboard["last_sync"]["status"] == "success"

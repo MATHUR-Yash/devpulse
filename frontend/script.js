@@ -292,10 +292,11 @@ function notificationItems() {
 function renderNotifications() {
   const feed = $("attention");
   feed.replaceChildren();
-  const items = notificationItems().filter((item) => item.run && periodRuns().some((run) => run.id === item.run.id)).slice(0, 2);
-  $("exception-count").textContent = periodRuns().filter((run) => outcome(run) === "failure").length;
+  const unresolved = notificationItems().filter(({ run }) => run && run.investigation_status !== "resolved");
+  const items = unresolved.slice(0, 2);
+  $("exception-count").textContent = unresolved.length;
   if (!items.length) {
-    feed.append(element("p", "No failed workflows in this period.", "empty"));
+    feed.append(element("p", "No unresolved failures in this period.", "empty"));
     return;
   }
   const list = element("ul", "", "notifications");
@@ -342,7 +343,10 @@ function renderRuns() {
     row.dataset.outcome = outcome(run);
     const label = run.name + (run.attempt > 1 ? " · attempt " + run.attempt : "");
     addCell(row, button(label, () => showRun(run), "run-link"));
-    addCell(row, badge(run.conclusion || run.status, outcome(run)));
+    const status = element("div", "", "workflow-status");
+    status.append(badge(run.conclusion || run.status, outcome(run)));
+    if (run.investigation_status) status.append(investigationBadge(run.investigation_status));
+    addCell(row, status);
     addCell(row, run.branch || "—");
     addCell(row, element("code", run.sha.slice(0, 7)));
     addCell(row, timestamp(run.started_at));
@@ -467,11 +471,109 @@ function showTestSummary(jobs, details) {
     : "No test steps identified in the workflow.", "quiet"));
 }
 
+const investigationLabels = { open: "Open", investigating: "Investigating", resolved: "Resolved" };
+
+function investigationBadge(status) {
+  return badge(investigationLabels[status], { open: "other", investigating: "active", resolved: "success" }[status]);
+}
+
+function investigationPanel(run, repo) {
+  const panel = element("section", "", "failure-investigation");
+  panel.append(element("h3", "Failure investigation"));
+  if (repo === "demo") {
+    panel.append(element("p", "Sign in and connect a repository to track failures and save resolution notes.", "quiet"));
+    return panel;
+  }
+  const path = "/repositories/" + repo + "/runs/" + run.id + "/investigation";
+  const message = element("p", "", "investigation-feedback");
+  message.setAttribute("role", "status");
+  const load = button("Load investigation", async () => {
+    load.disabled = true;
+    message.textContent = "Loading investigation…";
+    try {
+      const record = await api(path);
+      if (panel.isConnected && $("dialog").open && state.repository === repo) {
+        showInvestigationForm(panel, path, record, run, repo);
+      }
+    } catch (error) {
+      message.textContent = error.message;
+      load.disabled = false;
+    }
+  });
+  panel.append(load, message);
+  return panel;
+}
+
+function showInvestigationForm(panel, path, record, run, repo) {
+  const form = element("form", "", "investigation-form");
+  const status = element("select");
+  for (const [value, label] of Object.entries(investigationLabels)) {
+    status.add(new Option(label, value));
+  }
+  const cause = element("input");
+  cause.maxLength = 500;
+  const notes = element("textarea");
+  notes.maxLength = 2000;
+  notes.rows = 3;
+  const resolution = element("p", "", "quiet");
+  const feedback = element("p", "", "investigation-feedback");
+  feedback.setAttribute("role", "status");
+  const save = element("button", "Save investigation", "primary");
+  save.type = "submit";
+
+  for (const [caption, field] of [["Investigation status", status], ["Probable cause", cause],
+    ["Investigation or resolution notes", notes]]) {
+    const label = element("label", caption);
+    label.append(field);
+    form.append(label);
+  }
+  form.append(resolution, save, feedback);
+
+  function display(saved) {
+    status.value = saved.status;
+    cause.value = saved.cause;
+    notes.value = saved.notes;
+    resolution.textContent = saved.resolved_at ? "Resolved " + timestamp(saved.resolved_at) : "";
+    notes.required = status.value === "resolved";
+  }
+  status.addEventListener("change", () => { notes.required = status.value === "resolved"; });
+  display(record);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const fields = [status, cause, notes, save];
+    const values = { status: status.value, cause: cause.value, notes: notes.value };
+    fields.forEach((field) => { field.disabled = true; });
+    feedback.textContent = "Saving investigation…";
+    try {
+      const saved = await api(path, values);
+      display(saved);
+      feedback.textContent = "Investigation saved.";
+      if (state.repository === repo) {
+        const current = state.runs.find((item) => item.id === run.id);
+        if (current?.investigation_status) current.investigation_status = saved.status;
+        renderNotifications();
+        renderRuns();
+      }
+    } catch (error) {
+      feedback.textContent = error.message;
+    } finally {
+      fields.forEach((field) => { field.disabled = false; });
+    }
+  });
+  panel.replaceChildren(element("h3", "Failure investigation"), form);
+  status.focus();
+}
+
 async function showRun(run) {
   const repo = state.repository;
-  const target = dialog(run.name).id;
+  const target = dialog(run.name);
+  if (run.status === "completed" && outcome(run) === "failure") {
+    target.append(investigationPanel(run, repo));
+  }
+  const details = element("div");
   const loading = element("p", "Loading workflow stages…", "quiet");
-  $(target).append(loading);
+  details.append(loading);
+  target.append(details);
   const result = run.conclusion || run.status;
   try {
     const data = repo === "demo" ? {
@@ -488,7 +590,6 @@ async function showRun(run) {
       }],
     } : await api("/repositories/" + repo + "/runs/" + run.id);
     if (!loading.isConnected || !$("dialog").open) return;
-    const details = $(target);
     details.replaceChildren(element("p", (run.branch || "Unknown branch") + " · " + run.sha.slice(0, 7) + " · " + elapsed(run), "quiet"));
     const failedSteps = data.jobs.flatMap((job) => job.steps).filter((step) => outcome(step) === "failure");
     if (failedSteps.length) details.append(element("p", "Failed steps: " + failedSteps.map((step) => step.name).join(", "), "alert"));

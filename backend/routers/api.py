@@ -6,11 +6,11 @@ import os
 import re
 import secrets
 from datetime import timezone
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, Field
-from sqlalchemy import delete, select, or_, and_
+from pydantic import BaseModel, Field, StringConstraints
+from sqlalchemy import case, delete, select, or_, and_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -22,7 +22,7 @@ from ..services.oauth import session_id
 from ..models import RepositoryHook, PrivateRepository
 from ..models import SavedTestReport
 from ..services.insights import FAILURES, readiness, test_signals
-from ..models import BrowserSession, GitHubDeployment, Repository, SyncHistory, User, WorkflowRun
+from ..models import BrowserSession, FailureInvestigation, GitHubDeployment, Repository, SyncHistory, User, WorkflowRun
 from ..services.github import (
     collect_deployments, deployment_values, github_get, repository_path, save_deployment, save_run,
 )
@@ -50,6 +50,12 @@ class Registration(Credentials):
 
 class RepositoryInput(BaseModel):
     repository: str = Field(min_length=3, max_length=155)
+
+
+class InvestigationInput(BaseModel):
+    status: Literal["open", "investigating", "resolved"]
+    cause: Annotated[str, StringConstraints(strip_whitespace=True, max_length=500, pattern=r"^[^\x00]*$")] = ""
+    notes: Annotated[str, StringConstraints(strip_whitespace=True, max_length=2000, pattern=r"^[^\x00]*$")] = ""
 
 
 def open_session(db: Session, user: User, response: Response) -> dict:
@@ -202,8 +208,12 @@ def utc_iso(value):
 def dashboard(repository_id: int, request: Request, db: DB):
     repo = own_repo(db, request, repository_id)
     repository_access(repo, request, db, verify_public=False)
-    runs = db.scalars(select(WorkflowRun).where(WorkflowRun.repository_id == repository_id)
-        .order_by(WorkflowRun.github_run_id.desc(), WorkflowRun.run_attempt.desc()).limit(100)).all()
+    runs = db.execute(
+        select(WorkflowRun, FailureInvestigation.status)
+        .outerjoin(FailureInvestigation, FailureInvestigation.run_id == WorkflowRun.id)
+        .where(WorkflowRun.repository_id == repository_id)
+        .order_by(WorkflowRun.github_run_id.desc(), WorkflowRun.run_attempt.desc()).limit(100)
+    ).all()
     deployments = db.scalars(select(GitHubDeployment).where(GitHubDeployment.repository_id == repository_id)
         .order_by(GitHubDeployment.updated_at.desc()).limit(30))
     last_sync = db.scalar(select(SyncHistory).where(SyncHistory.repository_id == repository_id)
@@ -214,13 +224,70 @@ def dashboard(repository_id: int, request: Request, db: DB):
             "branch": run.branch, "sha": run.commit_sha, "status": run.status,
             "conclusion": run.conclusion, "started_at": utc_iso(run.started_at),
             "completed_at": utc_iso(run.completed_at),
-        } for run in runs],
+            "investigation_status": (investigation_status or "open")
+            if run.status == "completed" and run.conclusion in FAILURES else None,
+        } for run, investigation_status in runs],
         "deployments": [{
             "id": item.github_id, "environment": item.environment, "version": item.version,
             "sha": item.commit_sha, "status": item.status, "updated_at": utc_iso(item.updated_at),
         } for item in deployments],
         "last_sync": {"at": utc_iso(last_sync.synced_at), "status": last_sync.status} if last_sync else None,
     }
+
+
+def investigation_run(repository_id: int, run_id: int, request: Request, db: DB) -> WorkflowRun:
+    repo = own_repo(db, request, repository_id)
+    run = db.get(WorkflowRun, run_id)
+    if run is None or run.repository_id != repo.id:
+        raise HTTPException(404, "Workflow run was not found.")
+    repository_access(repo, request, db, verify_public=False)
+    if run.status != "completed" or run.conclusion not in FAILURES:
+        raise HTTPException(422, "Investigations are available for completed failed workflows.")
+    return run
+
+
+def investigation_data(record: FailureInvestigation | None) -> dict:
+    if record is None:
+        return {"status": "open", "cause": "", "notes": "", "updated_at": None, "resolved_at": None}
+    return {
+        "status": record.status, "cause": record.cause, "notes": record.notes,
+        "updated_at": utc_iso(record.updated_at), "resolved_at": utc_iso(record.resolved_at),
+    }
+
+
+@router.get("/repositories/{repository_id}/runs/{run_id}/investigation")
+def read_investigation(repository_id: int, run_id: int, request: Request, db: DB):
+    run = investigation_run(repository_id, run_id, request, db)
+    return investigation_data(db.get(FailureInvestigation, run.id))
+
+
+@router.post("/repositories/{repository_id}/runs/{run_id}/investigation")
+def save_investigation(repository_id: int, run_id: int, data: InvestigationInput, request: Request, db: DB):
+    run = investigation_run(repository_id, run_id, request, db)
+    if data.status == "resolved" and not data.notes:
+        raise HTTPException(422, "Enter a resolution note before marking this failure resolved.")
+    now = utc_now()
+    insert = insert_for(db, FailureInvestigation).values(
+        run_id=run.id, **data.model_dump(), updated_at=now,
+        resolved_at=now if data.status == "resolved" else None,
+    )
+    saved = db.scalars(insert.on_conflict_do_update(
+        index_elements=["run_id"],
+        set_={
+            "status": insert.excluded.status,
+            "cause": insert.excluded.cause,
+            "notes": insert.excluded.notes,
+            "updated_at": insert.excluded.updated_at,
+            "resolved_at": case(
+                (and_(FailureInvestigation.status == "resolved", insert.excluded.status == "resolved"),
+                 FailureInvestigation.resolved_at),
+                else_=insert.excluded.resolved_at,
+            ),
+        },
+    ).returning(FailureInvestigation)).one()
+    result = investigation_data(saved)
+    db.commit()
+    return result
 
 
 @router.get("/repositories/{repository_id}/runs/{run_id}")
