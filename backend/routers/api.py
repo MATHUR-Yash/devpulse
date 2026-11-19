@@ -10,7 +10,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, or_, and_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -20,6 +20,8 @@ from ..database import insert_for
 from ..services.junit import read_cases
 from ..services.oauth import session_id
 from ..models import RepositoryHook, PrivateRepository
+from ..models import SavedTestReport
+from ..services.insights import FAILURES, readiness, test_signals
 from ..models import BrowserSession, GitHubDeployment, Repository, SyncHistory, User, WorkflowRun
 from ..services.github import (
     collect_deployments, deployment_values, github_get, repository_path, save_deployment, save_run,
@@ -249,7 +251,133 @@ def test_report(repository_id: int, run_id: int, request: Request, db: DB):
     github_id, attempt = run.github_run_id, run.run_attempt
     token = repository_access(repo, request, db)
     db.rollback()
-    return read_cases(base, github_id, attempt, token)
+    return saved_report(db, run, base, token)
+
+
+def saved_report(db, run, base, token):
+    saved = db.get(SavedTestReport, run.id)
+    if saved:
+        return {"available": True, "cases": saved.cases}
+    report = read_cases(base, run.github_run_id, run.run_attempt, token)
+    if report["available"] and run.status == "completed":
+        stmt = insert_for(db, SavedTestReport).values(run_id=run.id, cases=report["cases"])
+        db.execute(stmt.on_conflict_do_nothing(index_elements=["run_id"]))
+        db.commit()
+    return report
+
+
+def run_summary(run):
+    return {"id": run.id, "name": run.workflow_name, "sha": run.commit_sha,
+            "branch": run.branch, "attempt": run.run_attempt, "conclusion": run.conclusion}
+
+
+@router.get("/repositories/{repository_id}/runs/{run_id}/comparison")
+def compare_failure(repository_id: int, run_id: int, request: Request, db: DB):
+    repo = own_repo(db, request, repository_id)
+    token = repository_access(repo, request, db)
+    run = db.get(WorkflowRun, run_id)
+    if not run or run.repository_id != repo.id:
+        raise HTTPException(404, "Workflow run was not found.")
+    if run.conclusion not in FAILURES:
+        raise HTTPException(422, "Choose a failed workflow to compare.")
+    candidates = db.scalars(select(WorkflowRun).where(
+        WorkflowRun.repository_id == repo.id, WorkflowRun.workflow_name == run.workflow_name,
+        WorkflowRun.branch == run.branch, WorkflowRun.conclusion == "success",
+    ).order_by(WorkflowRun.github_run_id.desc(), WorkflowRun.run_attempt.desc())).all()
+    baseline = next((r for r in candidates if (r.github_run_id, r.run_attempt) <
+                     (run.github_run_id, run.run_attempt)), None)
+    base = repository_path(repo)
+    def jobs_for(item):
+        return github_get(f"{base}/actions/runs/{item.github_run_id}/attempts/{item.run_attempt}/jobs",
+                          token=token, per_page=100)["jobs"]
+    jobs = jobs_for(run)
+    failed = [{"job": job["name"], "step": step["name"]} for job in jobs
+              for step in job.get("steps", []) if step.get("conclusion") in FAILURES]
+    return {"failed": run_summary(run), "baseline": run_summary(baseline) if baseline else None,
+            "failed_steps": failed, "first_failure": failed[0] if failed else None,
+            "baseline_jobs": [{"name": j["name"], "conclusion": j.get("conclusion")} for j in jobs_for(baseline)] if baseline else [],
+            "compare_url": f"https://github.com/{repo.owner}/{repo.name}/compare/{baseline.commit_sha}...{run.commit_sha}" if baseline else None}
+
+
+@router.get("/repositories/{repository_id}/runs/{run_id}/test-history")
+def test_history(repository_id: int, run_id: int, request: Request, db: DB):
+    repo = own_repo(db, request, repository_id)
+    token = repository_access(repo, request, db)
+    selected = db.get(WorkflowRun, run_id)
+    if not selected or selected.repository_id != repo.id:
+        raise HTTPException(404, "Workflow run was not found.")
+    runs = db.scalars(select(WorkflowRun).where(
+        WorkflowRun.repository_id == repo.id, WorkflowRun.workflow_name == selected.workflow_name,
+        WorkflowRun.branch == selected.branch, WorkflowRun.status == "completed",
+        or_(WorkflowRun.github_run_id < selected.github_run_id,
+            and_(WorkflowRun.github_run_id == selected.github_run_id,
+                 WorkflowRun.run_attempt <= selected.run_attempt)),
+    ).order_by(WorkflowRun.github_run_id.desc(), WorkflowRun.run_attempt.desc()).limit(5)).all()
+    reports, missing = [], []
+    for run in runs:
+        try:
+            report = saved_report(db, run, repository_path(repo), token)
+            if report["available"]:
+                reports.append((run, report["cases"]))
+            else:
+                missing.append({"run_id": run.id, "reason": "No retained JUnit artifact"})
+        except HTTPException as error:
+            missing.append({"run_id": run.id, "reason": error.detail})
+    return {"workflow": selected.workflow_name, "branch": selected.branch, "examined": len(runs),
+            "reports_available": len(reports), "missing": missing, "candidates": test_signals(reports)}
+
+
+@router.get("/repositories/{repository_id}/readiness")
+def release_readiness(repository_id: int, request: Request, db: DB):
+    repo = own_repo(db, request, repository_id)
+    token = repository_access(repo, request, db)
+    base = repository_path(repo)
+    info = github_get(base, token=token)
+    branch = info["default_branch"]
+    from urllib.parse import quote
+    head = github_get(f"{base}/commits/{quote(branch, safe='')}", token=token)["sha"]
+    runs = db.scalars(select(WorkflowRun).where(WorkflowRun.repository_id == repo.id,
+        WorkflowRun.branch == branch).order_by(WorkflowRun.github_run_id.desc(), WorkflowRun.run_attempt.desc()).limit(100)).all()
+    latest = {}
+    for run in runs:
+        if run.commit_sha == head:
+            latest.setdefault(run.github_run_id, run)
+    reports, missing = [], []
+    for run in list(latest.values())[:5]:
+        if run.status != "completed":
+            continue
+        try:
+            report = saved_report(db, run, base, token)
+            if report["available"]:
+                reports.append(report["cases"])
+            else:
+                missing.append(run.id)
+        except HTTPException:
+            missing.append(run.id)
+    deployments = db.scalars(select(GitHubDeployment).where(GitHubDeployment.repository_id == repo.id)
+        .order_by(GitHubDeployment.updated_at.desc())).all()
+    return {**readiness(runs, reports, deployments, head), "branch": branch,
+            "missing_reports": missing, "checked_at": utc_iso(utc_now()),
+            "scope": "Saved default-branch runs for the live head. JUnit sampled from up to five runs. Deployment environment: production."}
+
+
+@router.get("/portfolio")
+def portfolio(request: Request, db: DB):
+    user = current_user(request, db)
+    repos = db.scalars(select(Repository).where(Repository.user_id == user.id).order_by(Repository.name)).all()
+    result = []
+    for repo in repos:
+        try:
+            data = dashboard(repo.id, request, db)
+            runs = data["runs"]
+            result.append({"id": repo.id, "name": f"{repo.owner}/{repo.name}", "accessible": True,
+                "latest": runs[0] if runs else None, "run_count": len(runs),
+                "failed": sum(r["conclusion"] in FAILURES for r in runs),
+                "deployment": data["deployments"][0] if data["deployments"] else None,
+                "last_sync": data["last_sync"]})
+        except HTTPException:
+            result.append({"id": repo.id, "name": f"{repo.owner}/{repo.name}", "accessible": False})
+    return {"repositories": result}
 
 
 @router.post("/repositories/{repository_id}/webhook")

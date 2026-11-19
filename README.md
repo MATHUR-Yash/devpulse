@@ -102,4 +102,6 @@ Set the repository variable `DEVPULSE_DEPLOY_ENABLED` to `true` after the server
 
 ## Monitoring and operations
 
+Use Repository portfolio, Check release readiness and Analyze test stability above Overview. Failed run details also offer comparison with the previous successful run. See [release investigation guide](docs/release-insights.md) for evidence limits and demonstration steps.
+
 See [operator instructions](docs/operations.md) for JUnit reports, repository webhooks, private GitHub access and PostgreSQL recovery. The [UX study kit](docs/ux-coursework.md) includes editable design frames and a participant worksheet.

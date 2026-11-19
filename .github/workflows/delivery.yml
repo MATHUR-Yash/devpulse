@@ -44,6 +44,7 @@ jobs:
           path: reports/junit.xml
           if-no-files-found: warn
       - run: node --check frontend/script.js
+      - run: node --check frontend/insights.js
       - name: Restore a backup into a disposable database
         env:
           PGHOST: 127.0.0.1

@@ -3,6 +3,7 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#242321">
 <title>DevPulse — Delivery health</title><meta name="description" content="Pipeline overview, workflow failures, test results and deployment history in one workspace."><link rel="stylesheet" href="/style.css">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.6.1/dist/chart.umd.min.js" integrity="sha384-Emf5ZVIUiarAdhkgtqK+5/Z5qIvM6QoVrS+qAVtfyZVuD5lIHrac0me485+Antp0" crossorigin="anonymous" defer></script><script src="/script.js" defer></script>
+<script src="/insights.js"></script>
 </head><body>
 <a class="skip" href="#main">Skip to content</a>
 <aside class="sidebar"><a class="brand" href="/" aria-label="DevPulse home"><span class="brand-icon" aria-hidden="true">‹/›</span>DevPulse</a>
@@ -12,6 +13,7 @@
 <header class="commandbar" id="repository-controls"><div class="controls"><label for="repository">Repository</label><select id="repository"></select><button class="secondary" id="connect" hidden>Add repository</button><button class="primary" id="sync" hidden>Sync GitHub</button></div>
 <div class="refresh-controls"><span id="sync-state" role="status"></span><label class="auto-label"><input id="auto-refresh" type="checkbox" checked>Auto-refresh</label><label class="sr-only" for="range">Workflow time range</label><select id="range"><option value="14">Last 14 days</option><option value="7">Last 7 days</option><option value="1">Last 24 hours</option><option value="all">All saved runs</option></select></div></header>
 <main id="main">
+<div class="insight-toolbar"><button id="portfolio" class="secondary">Repository portfolio</button><button id="readiness" class="secondary">Check release readiness</button><button id="test-history" class="secondary">Analyze test stability</button></div>
 <section class="heading" id="overview"><div><p id="context" class="context"></p><h1>Delivery health</h1><p id="subtitle" class="muted"></p></div><span id="period" class="period"></span></section>
 <p id="notice" class="notice" role="status" hidden></p><p id="notification-update" class="notice" role="status" hidden></p>
 <section class="health-hero" aria-label="Pipeline success rate"><div class="hero-metric"><div class="hero-value"><strong id="health-rate">—</strong><span id="health-label" class="health-label"></span></div><p id="rate-caption">Pipeline success rate</p><div id="metrics" class="metrics" aria-label="Workflow statistics"></div></div><div class="health-trend"><div id="chart"></div><details id="trend-data"><summary>View success-rate data</summary><div id="trend-table"></div></details></div></section>

@@ -29,6 +29,7 @@ def test_startup_creates_all_tables(tmp_path):
         "github_deployments",
         "repository_hooks",
         "private_repositories",
+        "saved_test_reports",
     }
 
 
