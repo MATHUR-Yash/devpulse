@@ -575,12 +575,34 @@ $("sync").addEventListener("click", async () => {
   }
 });
 
+const lastAutomaticSync = new Map();
+let refreshInProgress = false;
 setInterval(async () => {
-  if (state.repository === "demo" || document.hidden || $("sync").disabled) return;
+  const repo = state.repository;
+  if (repo === "demo" || document.hidden || $("sync").disabled || refreshInProgress) return;
+  refreshInProgress = true;
   try {
     await loadRepository({ announce: true });
-  } catch {
-    // The next refresh retries. Manual sync reports connection errors.
+    if (repo !== state.repository) return;
+    const lastAttempt = Math.max(Date.parse(state.lastSync?.at) || 0, lastAutomaticSync.get(repo) || 0);
+    if (Date.now() - lastAttempt >= 300000) {
+      lastAutomaticSync.set(repo, Date.now());
+      await api("/repositories/" + repo + "/sync", undefined, "POST");
+      if (repo === state.repository) await loadRepository({ announce: true });
+    }
+  } catch (error) {
+    if (repo !== state.repository) return;
+    if ([401, 403, 404].includes(error.status)) {
+      state.runs = [];
+      state.deployments = [];
+      state.lastSync = null;
+      $("notification-update").hidden = true;
+      if ($("dialog").open) $("dialog").close();
+      render();
+    }
+    notice(error.message);
+  } finally {
+    refreshInProgress = false;
   }
 }, 15000);
 

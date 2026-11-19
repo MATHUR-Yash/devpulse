@@ -6,6 +6,8 @@ Run pytest with `--junitxml=reports/junit.xml` and upload that file using the ar
 
 ## Automatic refresh
 
+An open, visible dashboard checks GitHub when its last sync is five minutes old, including for public repositories where the viewer cannot install hooks. A newly connected repository starts syncing on the next dashboard refresh. GitHub failures back off for five minutes. Signed events can arrive between those checks, including while the browser is closed.
+
 Select a connected public repository. Open **Account → Set up repository webhook**, generate its secret and copy the URL and secret into GitHub repository Settings → Webhooks. Choose application/json, Workflow runs, and Deployment statuses. GitHub must show a successful delivery. The visible dashboard checks saved events every 15 seconds. Use Sync GitHub for history, private repositories and missed deliveries. A scoped hook belongs to just one DevPulse connection.
 
 ## Private access
