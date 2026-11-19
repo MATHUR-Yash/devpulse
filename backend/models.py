@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, String, UniqueConstraint, func, JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -67,6 +67,12 @@ class RepositoryHook(Base):
 class PrivateRepository(Base):
     __tablename__ = "private_repositories"
     repository_id: Mapped[int] = mapped_column(ForeignKey("repositories.id"), primary_key=True)
+
+
+class SavedTestReport(Base):
+    __tablename__ = "saved_test_reports"
+    run_id: Mapped[int] = mapped_column(ForeignKey("workflow_runs.id"), primary_key=True)
+    cases: Mapped[list] = mapped_column(JSON)
 
 
 class Deployment(Base):

@@ -487,6 +487,7 @@ async function showRun(run) {
     const failedSteps = data.jobs.flatMap((job) => job.steps).filter((step) => outcome(step) === "failure");
     if (failedSteps.length) details.append(element("p", "Failed steps: " + failedSteps.map((step) => step.name).join(", "), "alert"));
     showTestSummary(data.jobs, details);
+    if (outcome(run) === "failure") details.append(button("Compare with last successful run", () => compareFailure(run), "secondary"));
     if (repo !== "demo") {
       const report = element("section");
       const openReport = button("View individual test results", async () => {
@@ -641,6 +642,9 @@ $("more-runs").addEventListener("click", () => { showAllRuns = !showAllRuns; ren
 $("view-failures").addEventListener("click", () => { $("filter").value = "failure"; renderRuns(); });
 window.addEventListener("resize", () => renderHealthTrend());
 $("account").addEventListener("click", () => account());
+$("portfolio").addEventListener("click", showPortfolio);
+$("readiness").addEventListener("click", showReadiness);
+$("test-history").addEventListener("click", chooseTestHistory);
 $("filter").addEventListener("change", renderRuns);
 $("repository").addEventListener("change", async (event) => {
   state.repository = event.target.value;
