@@ -354,8 +354,10 @@ def release_readiness(repository_id: int, request: Request, db: DB):
                 missing.append(run.id)
         except HTTPException:
             missing.append(run.id)
+    # GitHub can mark older deployments inactive after a new release succeeds.
+    # Their status timestamp must not make them the newest deployment.
     deployments = db.scalars(select(GitHubDeployment).where(GitHubDeployment.repository_id == repo.id)
-        .order_by(GitHubDeployment.updated_at.desc())).all()
+        .order_by(GitHubDeployment.github_id.desc())).all()
     return {**readiness(runs, reports, deployments, head), "branch": branch,
             "missing_reports": missing, "checked_at": utc_iso(utc_now()),
             "scope": "Saved default-branch runs for the live head. JUnit sampled from up to five runs. Deployment environment: production."}
