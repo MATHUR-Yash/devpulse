@@ -74,7 +74,8 @@ function outcome(run) {
 
 function badge(value, kind = value) {
   const labels = { success: "Succeeded", failure: "Failed", in_progress: "In progress", queued: "Queued", skipped: "Skipped", cancelled: "Cancelled" };
-  return element("span", labels[value] || String(value || "unknown").replaceAll("_", " "), "badge " + kind);
+  const label = labels[value] || String(value || "unknown").replaceAll("_", " ");
+  return element("span", label, "badge " + kind);
 }
 
 function timestamp(value) {
@@ -326,7 +327,11 @@ function renderRuns() {
   const rows = $("runs");
   rows.replaceChildren();
   const filter = $("filter").value;
-  const matches = periodRuns().filter((run) => filter === "all" || outcome(run) === filter);
+  const matches = periodRuns().filter((run) => {
+    if (filter === "all") return true;
+    if (filter === "cancelled-or-skipped") return ["cancelled", "skipped"].includes(run.conclusion);
+    return outcome(run) === filter;
+  });
   const visible = showAllRuns ? matches : matches.slice(0, 5);
   $("run-count").textContent = matches.length + " runs";
   $("more-runs").hidden = matches.length <= 5;
@@ -334,6 +339,7 @@ function renderRuns() {
   if (!visible.length) rows.append(emptyRow("No workflow runs match this view.", 6));
   for (const run of visible) {
     const row = element("tr");
+    row.dataset.outcome = outcome(run);
     const label = run.name + (run.attempt > 1 ? " · attempt " + run.attempt : "");
     addCell(row, button(label, () => showRun(run), "run-link"));
     addCell(row, badge(run.conclusion || run.status, outcome(run)));
