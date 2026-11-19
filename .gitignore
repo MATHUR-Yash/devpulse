@@ -4,6 +4,8 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .coverage
+*.dump
+/reports/
 
 # Local configuration and SQLite files
 .env

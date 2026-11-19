@@ -12,14 +12,18 @@ from ..database import insert_for
 from ..models import GitHubDeployment, Repository, WorkflowRun
 
 
-def github_get(path: str, **params):
-    token = os.getenv("DEVPULSE_GITHUB_TOKEN")
+def github_headers(token=None):
+    token = token or os.getenv("DEVPULSE_GITHUB_TOKEN")
     headers = {"Accept": "application/vnd.github+json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def github_get(path: str, *, token=None, **params):
     try:
         response = httpx2.get(
-            f"https://api.github.com{path}", params=params, headers=headers, timeout=10
+            f"https://api.github.com{path}", params=params, headers=github_headers(token), timeout=10
         )
         response.raise_for_status()
     except httpx2.HTTPStatusError as error:
@@ -46,11 +50,11 @@ def repository_path(repo: Repository) -> str:
     return f"/repos/{repo.owner}/{repo.name}"
 
 
-def collect_deployments(base: str) -> list[dict]:
-    deployments = github_get(f"{base}/deployments", per_page=5)
+def collect_deployments(base: str, token=None) -> list[dict]:
+    deployments = github_get(f"{base}/deployments", token=token, per_page=5)
     results = []
     for item in deployments:
-        updates = github_get(f"{base}/deployments/{item['id']}/statuses", per_page=1)
+        updates = github_get(f"{base}/deployments/{item['id']}/statuses", token=token, per_page=1)
         latest = updates[0] if updates else {}
         results.append(deployment_values(item, latest))
     return results

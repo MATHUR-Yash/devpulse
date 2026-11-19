@@ -395,6 +395,27 @@ async function showRun(run) {
     const failedSteps = data.jobs.flatMap((job) => job.steps).filter((step) => outcome(step) === "failure");
     if (failedSteps.length) details.append(element("p", "Failed steps: " + failedSteps.map((step) => step.name).join(", "), "alert"));
     showTestSummary(data.jobs, details);
+    if (repo !== "demo") {
+      const report = element("section");
+      const openReport = button("View individual test results", async () => {
+        openReport.disabled = true;
+        try {
+          const result = await api("/repositories/" + repo + "/runs/" + run.id + "/tests");
+          report.replaceChildren(element("p", result.available
+            ? result.cases.length + " test cases" : "This attempt has no available JUnit report."));
+          const list = element("ul");
+          for (const test of result.cases) {
+            list.append(element("li", [test.class, test.name].filter(Boolean).join(" · ") + " — " + test.status));
+          }
+          report.append(list);
+        } catch (error) {
+          report.replaceChildren(element("p", error.message), openReport);
+          openReport.disabled = false;
+        }
+      });
+      report.append(openReport);
+      details.append(report);
+    }
     const timeline = element("ol", "", "timeline");
     for (const job of data.jobs) {
       const li = element("li");
@@ -464,6 +485,29 @@ function formDialog(title, fields, onSubmit, toggle) {
 function account(register = false) {
   if (state.user) {
     dialog("Account").append(element("p", "Signed in as " + state.user.username, "quiet"),
+      button("Connect GitHub for private repositories", async () => {
+        if (!(await api("/auth/me")).github_configured) {
+          dialog("Private repositories").append(element("p", "The server owner must configure a GitHub App before private repositories can be connected."));
+          return;
+        }
+        location.assign("/api/auth/github/connect");
+      }),
+      button("Set up repository webhook", () => {
+        const panel = dialog("Repository webhook");
+        const repo = state.repository;
+        if (repo === "demo") {
+          panel.append(element("p", "Select a connected public repository first."));
+          return;
+        }
+        panel.append(element("p", "Generate a signing secret for this repository. Generating another replaces its previous secret."),
+          button("Generate signing secret", async () => {
+            try {
+              const hook = await api("/repositories/" + repo + "/webhook", undefined, "POST");
+              panel.replaceChildren(element("p", "In GitHub repository settings, add a webhook using application/json. Select Workflow runs and Deployment statuses."),
+                element("p", location.origin + hook.path), element("code", hook.secret));
+            } catch (error) { panel.append(element("p", error.message)); }
+          }));
+      }),
       button("Sign out", async () => {
         try {
           await api("/auth/logout", undefined, "POST");

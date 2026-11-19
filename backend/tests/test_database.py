@@ -27,6 +27,8 @@ def test_startup_creates_all_tables(tmp_path):
         "sync_history",
         "browser_sessions",
         "github_deployments",
+        "repository_hooks",
+        "private_repositories",
     }
 
 
