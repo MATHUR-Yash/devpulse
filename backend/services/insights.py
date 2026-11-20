@@ -34,13 +34,15 @@ def readiness(runs, reports, deployments, head):
         if run.commit_sha == head:
             latest.setdefault(run.github_run_id, run)
     current = list(latest.values())
+    run_count = len(current)
+    run_label = "run" if run_count == 1 else "runs"
     workflows_ok = bool(current) and all(r.status == "completed" and r.conclusion == "success" for r in current)
     tests_ok = bool(reports) and all(report and all(c["status"] == "passed" for c in report) for report in reports)
     deployment = next((d for d in deployments if d.environment.lower() == "production"), None)
     deployed = bool(deployment and deployment.status == "success" and deployment.commit_sha == head)
     checks = [
         {"name": "Default-branch workflows", "passed": workflows_ok,
-         "detail": f"{len(current)} saved runs for the current head. All must have succeeded."},
+         "detail": f"{run_count} saved {run_label} for the current head. All must have succeeded."},
         {"name": "Individual test reports", "passed": tests_ok,
          "detail": "At least one nonempty JUnit report is required. Every reported case must pass."},
         {"name": "Production deployment", "passed": deployed,

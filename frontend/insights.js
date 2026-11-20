@@ -1,5 +1,5 @@
 /* Account-scoped investigation views for the delivery dashboard. */
-function investigationPanel(title) {
+function openInsightPanel(title) {
   const shell = dialog(title);
   const content = element("section");
   shell.append(content);
@@ -7,7 +7,7 @@ function investigationPanel(title) {
 }
 
 function insightDialog(title) {
-  const content = investigationPanel(title);
+  const content = openInsightPanel(title);
   if (state.repository === "demo" || !state.user) {
     content.append(element("p", "Sign in and select a connected repository to analyze its real workflow and deployment data.", "quiet"));
     return null;
@@ -48,7 +48,7 @@ async function compareFailure(run) {
 }
 
 async function showPortfolio() {
-  const content = investigationPanel("Repository portfolio");
+  const content = openInsightPanel("Repository portfolio");
   if (!state.user) { content.append(element("p", "Sign in to see your connected repositories.", "quiet")); return; }
   content.append(element("p", "Loading saved repository summaries…", "quiet"));
   try {
@@ -60,7 +60,8 @@ async function showPortfolio() {
       card.append(element("h3", repo.name));
       if (!repo.accessible) card.append(element("p", "Reconnect GitHub to view this private repository."));
       else {
-        card.append(element("p", repo.run_count + " saved runs · " + repo.failed + " failed"));
+        const runLabel = repo.run_count === 1 ? " saved run" : " saved runs";
+        card.append(element("p", repo.run_count + runLabel + " · " + repo.failed + " failed"));
         if (repo.latest) card.append(badge(repo.latest.conclusion || repo.latest.status, outcome(repo.latest)), element("p", repo.latest.name));
         card.append(element("p", repo.deployment ? "Latest deployment · " + repo.deployment.environment + " · " + repo.deployment.status : "No deployments recorded.", "quiet"));
         card.append(element("p", repo.last_sync ? "Last sync · " + timestamp(repo.last_sync.at) + " · " + repo.last_sync.status : "Never synced", "quiet"));

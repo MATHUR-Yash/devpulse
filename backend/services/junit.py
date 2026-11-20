@@ -44,12 +44,19 @@ def read_cases(base, run_id, attempt, token=None):
         return {"available": False, "cases": []}
     if artifact["size_in_bytes"] > LIMIT:
         raise HTTPException(422, "The report archive exceeds 2 MiB.")
+    headers = github_headers(token)
+    if "Authorization" not in headers:
+        raise HTTPException(503, "Individual test results need a GitHub credential with Actions read access. "
+                            "Ask the DevPulse administrator to configure it, or open the run on GitHub.")
     try:
         url = f"https://api.github.com{base}/actions/artifacts/{int(artifact['id'])}/zip"
-        redirect = httpx2.get(url, headers=github_headers(token), timeout=10)
+        redirect = httpx2.get(url, headers=headers, timeout=10)
         location = redirect.headers.get("location", "")
+        if redirect.status_code in {401, 403, 404} and redirect.headers.get("x-ratelimit-remaining") != "0":
+            raise HTTPException(503, "DevPulse could not access this test report on GitHub. "
+                                "Ask the DevPulse administrator to check the repository's Actions read access.")
         if redirect.status_code != 302 or not location.startswith("https://"):
-            raise HTTPException(502, "GitHub did not provide the report download. Check Actions read access.")
+            raise HTTPException(502, "GitHub could not provide the test report download. Try again in a moment.")
         archive = bytearray()
         with httpx2.stream("GET", location, timeout=10) as download:
             download.raise_for_status()

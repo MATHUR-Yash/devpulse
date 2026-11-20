@@ -31,6 +31,37 @@ def test_junit_outcomes_and_invalid_xml():
         junit.parse_report(archive('<!DOCTYPE t><testsuite/>'))
 
 
+def test_junit_distinguishes_missing_report_from_missing_credentials(monkeypatch):
+    monkeypatch.delenv("DEVPULSE_GITHUB_TOKEN", raising=False)
+    artifacts = []
+    monkeypatch.setattr(junit, "github_get", lambda *args, **kwargs: {"artifacts": artifacts})
+    monkeypatch.setattr(junit.httpx2, "get", lambda *args, **kwargs: pytest.fail("Unexpected download attempt"))
+
+    assert junit.read_cases("/repos/example/demo", 10, 2) == {"available": False, "cases": []}
+
+    artifacts.append({"id": 42, "name": "devpulse-junit-2", "expired": False, "size_in_bytes": 10})
+    with pytest.raises(HTTPException) as error:
+        junit.read_cases("/repos/example/demo", 10, 2)
+    assert error.value.status_code == 503
+    assert "Actions read access" in error.value.detail
+
+
+def test_junit_reports_denied_artifact_access(monkeypatch):
+    monkeypatch.setattr(junit, "github_get", lambda *args, **kwargs: {"artifacts": [
+        {"id": 42, "name": "devpulse-junit-2", "expired": False, "size_in_bytes": 10},
+    ]})
+
+    def denied(url, *, headers, timeout):
+        assert headers["Authorization"] == "Bearer test-only-token"
+        return junit.httpx2.Response(403)
+
+    monkeypatch.setattr(junit.httpx2, "get", denied)
+    with pytest.raises(HTTPException) as error:
+        junit.read_cases("/repos/example/demo", 10, 2, token="test-only-token")
+    assert error.value.status_code == 503
+    assert "check the repository's Actions read access" in error.value.detail
+
+
 def test_scoped_hook_updates_only_its_dashboard(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "github_get", lambda *a, **kw: {
         "private": False, "id": 1, "owner": {"login": "o"}, "name": "r",

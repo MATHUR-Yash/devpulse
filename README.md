@@ -33,6 +33,8 @@ Open the [dashboard](http://127.0.0.1:8000/), [API docs](http://127.0.0.1:8000/d
 
 Public repository data works without a token, subject to GitHub's unauthenticated API rate limit. Optionally set `DEVPULSE_GITHUB_TOKEN` for higher limits. Use a read-only GitHub credential with Actions, deployments, and repository metadata access. Keep it server-side.
 
+**View individual test results** requires a GitHub Actions artifact named `devpulse-junit-<attempt>` containing `junit.xml`. GitHub requires a credential with Actions read access to download the report even for public repositories. For public repositories, set `DEVPULSE_GITHUB_TOKEN` on the server. For private repositories, use the authorized GitHub App connection. Workflow summaries and links to logs remain available when the report is unavailable.
+
 The **Workflow performance** chart shows daily average run duration and pass rate for the latest seven active days in UTC. Pass rate counts successful and failed runs. The chart also has a data table.
 
 The in-app notification feed shows workflow failures and successful deployments for the selected repository. Open dashboards refresh saved data every 15 seconds. To receive updates between manual syncs, set `DEVPULSE_WEBHOOK_SECRET` and configure a repository webhook for **Workflow runs** and **Deployment statuses** using your HTTPS base URL plus `/api/webhooks/github`. Choose JSON and set the same secret.

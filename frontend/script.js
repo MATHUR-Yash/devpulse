@@ -334,7 +334,7 @@ function renderRuns() {
     return outcome(run) === filter;
   });
   const visible = showAllRuns ? matches : matches.slice(0, 5);
-  $("run-count").textContent = matches.length + " runs";
+  $("run-count").textContent = matches.length + (matches.length === 1 ? " run" : " runs");
   $("more-runs").hidden = matches.length <= 5;
   $("more-runs").textContent = showAllRuns ? "Show recent workflows" : "Show all " + matches.length + " workflows";
   if (!visible.length) rows.append(emptyRow("No workflow runs match this view.", 6));
@@ -455,9 +455,11 @@ async function loadRepository({ announce = false } = {}) {
 }
 
 function dialog(title) {
+  const modal = $("dialog");
   $("dialog-title").textContent = title;
   $("dialog-content").replaceChildren();
-  if (!$("dialog").open) $("dialog").showModal();
+  if (modal.open) modal.querySelector("button").focus();
+  else modal.showModal();
   return $("dialog-content");
 }
 
@@ -596,24 +598,30 @@ async function showRun(run) {
     showTestSummary(data.jobs, details);
     if (outcome(run) === "failure") details.append(button("Compare with last successful run", () => compareFailure(run), "secondary"));
     if (repo !== "demo") {
+      const feedback = element("p", "", "quiet");
+      feedback.setAttribute("role", "status");
       const report = element("section");
       const openReport = button("View individual test results", async () => {
         openReport.disabled = true;
+        feedback.textContent = "Loading individual test results…";
         try {
           const result = await api("/repositories/" + repo + "/runs/" + run.id + "/tests");
-          report.replaceChildren(element("p", result.available
-            ? result.cases.length + " test cases" : "This attempt has no available JUnit report."));
-          const list = element("ul");
-          for (const test of result.cases) {
-            list.append(element("li", [test.class, test.name].filter(Boolean).join(" · ") + " — " + test.status));
+          feedback.textContent = result.available
+            ? result.cases.length + (result.cases.length === 1 ? " test case" : " test cases")
+            : "This attempt has no available JUnit report.";
+          if (result.cases.length) {
+            const list = element("ul");
+            for (const test of result.cases) {
+              list.append(element("li", [test.class, test.name].filter(Boolean).join(" · ") + " — " + test.status));
+            }
+            report.append(list);
           }
-          report.append(list);
         } catch (error) {
-          report.replaceChildren(element("p", error.message), openReport);
+          feedback.textContent = error.message;
           openReport.disabled = false;
         }
       });
-      report.append(openReport);
+      report.append(openReport, feedback);
       details.append(report);
     }
     const timeline = element("ol", "", "timeline");
@@ -734,15 +742,25 @@ function account(register = false) {
   }, { label: register ? "Use existing account" : "Create account", action: () => account(!register) });
 }
 
-$("menu").addEventListener("click", () => {
-  const expanded = document.querySelector(".sidebar").classList.toggle("open");
-  $("menu").setAttribute("aria-expanded", String(expanded));
+const menuButton = $("menu");
+const sidebar = menuButton.closest(".sidebar");
+
+function setMenuExpanded(expanded) {
+  sidebar.classList.toggle("open", expanded);
+  menuButton.setAttribute("aria-expanded", String(expanded));
+}
+
+menuButton.addEventListener("click", () => setMenuExpanded(!sidebar.classList.contains("open")));
+sidebar.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !sidebar.classList.contains("open") || !menuButton.getClientRects().length) return;
+  event.preventDefault();
+  setMenuExpanded(false);
+  menuButton.focus();
 });
 document.querySelectorAll("nav a").forEach((link) => link.addEventListener("click", () => {
   document.querySelectorAll("nav a").forEach((item) => item.removeAttribute("aria-current"));
   link.setAttribute("aria-current", "page");
-  document.querySelector(".sidebar").classList.remove("open");
-  $("menu").setAttribute("aria-expanded", "false");
+  setMenuExpanded(false);
 }));
 $("range").addEventListener("change", () => { showAllRuns = false; render(); });
 $("more-runs").addEventListener("click", () => { showAllRuns = !showAllRuns; renderRuns(); });
